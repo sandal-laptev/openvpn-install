@@ -711,24 +711,24 @@ function installOpenVPN() {
 				apt-get update
 			fi
 			# Ubuntu > 16.04 and Debian > 8 have OpenVPN >= 2.4 without the need of a third party repository.
-			apt-get install -y openvpn iptables openssl wget ca-certificates curl
+			apt-get install -y openvpn iptables openssl wget ca-certificates curl rsync
 		elif [[ $OS == 'centos' ]]; then
 			yum install -y epel-release
-			yum install -y openvpn iptables openssl wget ca-certificates curl tar 'policycoreutils-python*'
+			yum install -y openvpn iptables openssl wget ca-certificates curl rsync tar 'policycoreutils-python*'
 		elif [[ $OS == 'oracle' ]]; then
 			yum install -y oracle-epel-release-el8
 			yum-config-manager --enable ol8_developer_EPEL
-			yum install -y openvpn iptables openssl wget ca-certificates curl tar policycoreutils-python-utils
+			yum install -y openvpn iptables openssl wget ca-certificates curl rsync tar policycoreutils-python-utils
 		elif [[ $OS == 'amzn' ]]; then
 			amazon-linux-extras install -y epel
-			yum install -y openvpn iptables openssl wget ca-certificates curl
+			yum install -y openvpn iptables openssl wget ca-certificates curl rsync
 		elif [[ $OS == 'amzn2023' ]]; then
 			dnf install -y openvpn iptables openssl wget ca-certificates
 		elif [[ $OS == 'fedora' ]]; then
-			dnf install -y openvpn iptables openssl wget ca-certificates curl policycoreutils-python-utils
+			dnf install -y openvpn iptables openssl wget ca-certificates curl rsync policycoreutils-python-utils
 		elif [[ $OS == 'arch' ]]; then
 			# Install required dependencies and upgrade the system
-			pacman --needed --noconfirm -Syu openvpn iptables openssl wget ca-certificates curl
+			pacman --needed --noconfirm -Syu openvpn iptables openssl wget ca-certificates curl rsync
 		fi
 		# An old version of easy-rsa was available by default in some openvpn packages
 		if [[ -d /etc/openvpn/easy-rsa/ ]]; then
@@ -1265,6 +1265,31 @@ function removeUnbound() {
 	fi
 }
 
+function backupLocal() {
+    BACKUP_DIR="/var/backups/openvpn"
+    mkdir -p "$BACKUP_DIR"
+
+    FINAL_ARCHIVE="$BACKUP_DIR/openvpn-backup-$(date +%F_%H-%M-%S).tar.gz"
+
+    # Create temporary structure for backup
+    TMP_DIR=$(mktemp -d)
+
+    # Copy necessary data
+    rsync -a --exclude='easy-rsa' /etc/openvpn "$TMP_DIR/"
+    if [[ -d /etc/openvpn/easy-rsa/pki ]]; then
+        mkdir -p "$TMP_DIR/openvpn/easy-rsa"
+        cp -a /etc/openvpn/easy-rsa/pki "$TMP_DIR/openvpn/easy-rsa/"
+    fi
+
+    # Create archive from temporary structure
+    tar -czf "$FINAL_ARCHIVE" -C "$TMP_DIR" openvpn
+
+    # Remove temporary folder
+    rm -rf "$TMP_DIR"
+
+    echo "Backup created: $FINAL_ARCHIVE"
+}
+
 function removeOpenVPN() {
 	echo ""
 	read -rp "Do you really want to remove OpenVPN? [y/n]: " -e -i n REMOVE
@@ -1350,10 +1375,11 @@ function manageMenu() {
 	echo "What do you want to do?"
 	echo "   1) Add a new user"
 	echo "   2) Revoke existing user"
-	echo "   3) Remove OpenVPN"
-	echo "   4) Exit"
-	until [[ $MENU_OPTION =~ ^[1-4]$ ]]; do
-		read -rp "Select an option [1-4]: " MENU_OPTION
+	echo "   3) Backup OpenVPN"
+	echo "   4) Remove OpenVPN"
+	echo "   5) Exit"
+	until [[ $MENU_OPTION =~ ^[1-5]$ ]]; do
+		read -rp "Select an option [1-5]: " MENU_OPTION
 	done
 
 	case $MENU_OPTION in
@@ -1364,9 +1390,12 @@ function manageMenu() {
 		revokeClient
 		;;
 	3)
-		removeOpenVPN
+		backup_openvpn
 		;;
 	4)
+		removeOpenVPN
+		;;
+	5)
 		exit 0
 		;;
 	esac
