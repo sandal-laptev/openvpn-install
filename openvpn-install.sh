@@ -1229,6 +1229,98 @@ function revokeClient() {
 	echo "Certificate for client $CLIENT revoked."
 }
 
+function restoreClientConfig() {
+    INDEX_FILE="/etc/openvpn/easy-rsa/pki/index.txt"
+    VALID_CLIENTS=()
+
+    echo "Available users for configuration restoration:"
+    for CRT in /etc/openvpn/easy-rsa/pki/issued/*.crt; do
+        CLIENT_NAME=$(basename "$CRT" .crt)
+        [[ "$CLIENT_NAME" == "server" ]] && continue
+
+        CLIENT_KEY="/etc/openvpn/easy-rsa/pki/private/${CLIENT_NAME}.key"
+        [[ ! -f "$CLIENT_KEY" ]] && continue
+
+        # Check if certificate has been revoked
+        SERIAL=$(openssl x509 -serial -noout -in "$CRT" | cut -d= -f2)
+        if grep -q "^R.*$SERIAL" "$INDEX_FILE"; then
+            continue
+        fi
+
+        # Check expiration date
+        if ! openssl x509 -checkend 0 -noout -in "$CRT" > /dev/null; then
+            continue
+        fi
+
+        VALID_CLIENTS+=("$CLIENT_NAME")
+        echo " - $CLIENT_NAME"
+    done
+
+    if [[ ${#VALID_CLIENTS[@]} -eq 0 ]]; then
+        echo "No available users for configuration restoration."
+        return
+    fi
+
+    read -rp "Enter client name from the list: " CLIENT
+    if [[ ! " ${VALID_CLIENTS[*]} " =~ " ${CLIENT} " ]]; then
+        echo "Invalid client name."
+        return
+    fi
+
+    # Determine user's home directory
+    if [ -e "/home/${CLIENT}" ]; then
+        homeDir="/home/${CLIENT}"
+    elif [ "${SUDO_USER}" ]; then
+        if [ "${SUDO_USER}" == "root" ]; then
+            homeDir="/root"
+        else
+            homeDir="/home/${SUDO_USER}"
+        fi
+    else
+        homeDir="/root"
+    fi
+
+    # Detect TLS mode
+    if grep -qs "^tls-crypt" /etc/openvpn/server.conf; then
+        TLS_SIG="1"
+    elif grep -qs "^tls-auth" /etc/openvpn/server.conf; then
+        TLS_SIG="2"
+    fi
+
+    # Generate OVPN configuration
+    cp /etc/openvpn/client-template.txt "$homeDir/$CLIENT.ovpn"
+    {
+        echo "<ca>"
+        cat "/etc/openvpn/easy-rsa/pki/ca.crt"
+        echo "</ca>"
+
+        echo "<cert>"
+        awk '/BEGIN/,/END CERTIFICATE/' "/etc/openvpn/easy-rsa/pki/issued/$CLIENT.crt"
+        echo "</cert>"
+
+        echo "<key>"
+        cat "/etc/openvpn/easy-rsa/pki/private/$CLIENT.key"
+        echo "</key>"
+
+        case $TLS_SIG in
+        1)
+            echo "<tls-crypt>"
+            cat /etc/openvpn/tls-crypt.key
+            echo "</tls-crypt>"
+            ;;
+        2)
+            echo "key-direction 1"
+            echo "<tls-auth>"
+            cat /etc/openvpn/tls-auth.key
+            echo "</tls-auth>"
+            ;;
+        esac
+    } >>"$homeDir/$CLIENT.ovpn"
+
+    echo ""
+    echo "Configuration restored: $homeDir/$CLIENT.ovpn"
+}
+
 function removeUnbound() {
 	# Remove OpenVPN-related config
 	sed -i '/include: \/etc\/unbound\/openvpn.conf/d' /etc/unbound/unbound.conf
@@ -1375,11 +1467,12 @@ function manageMenu() {
 	echo "What do you want to do?"
 	echo "   1) Add a new user"
 	echo "   2) Revoke existing user"
-	echo "   3) Backup OpenVPN"
-	echo "   4) Remove OpenVPN"
-	echo "   5) Exit"
-	until [[ $MENU_OPTION =~ ^[1-5]$ ]]; do
-		read -rp "Select an option [1-5]: " MENU_OPTION
+	echo "   3) Restore user configuration"
+	echo "   4) Backup OpenVPN"
+	echo "   5) Remove OpenVPN"
+	echo "   6) Exit"
+	until [[ $MENU_OPTION =~ ^[1-6]$ ]]; do
+		read -rp "Select an option [1-6]: " MENU_OPTION
 	done
 
 	case $MENU_OPTION in
@@ -1390,12 +1483,15 @@ function manageMenu() {
 		revokeClient
 		;;
 	3)
-		backup_openvpn
+		restoreClientConfig
 		;;
 	4)
-		removeOpenVPN
+		backup_openvpn
 		;;
 	5)
+		removeOpenVPN
+		;;
+	6)
 		exit 0
 		;;
 	esac
