@@ -4,6 +4,14 @@
 # Secure OpenVPN server installer for Debian, Ubuntu, CentOS, Amazon Linux 2, Fedora, Oracle Linux 8, Arch Linux, Rocky Linux and AlmaLinux.
 # https://github.com/angristan/openvpn-install
 
+OPENVPN_ROOT="/etc/openvpn"
+UNBOUND_ROOT="/etc/unbound"
+UNBOUND_CONF="$UNBOUND_ROOT/unbound.conf"
+UNBOUND_OPENVPN_CONF="$UNBOUND_ROOT/openvpn.conf"
+EASYRSA_ROOT="$OPENVPN_ROOT/easy-rsa"
+EASYRSA_PKI="$EASYRSA_ROOT/pki"
+SERVER_CONF="$OPENVPN_ROOT/server.conf"
+
 function isRoot() {
 	if [ "$EUID" -ne 0 ]; then
 		return 1
@@ -109,7 +117,7 @@ function initialCheck() {
 
 function installUnbound() {
 	# If Unbound isn't installed, install it
-	if [[ ! -e /etc/unbound/unbound.conf ]]; then
+	if [[ ! -e $UNBOUND_CONF ]]; then
 
 		if [[ $OS =~ (debian|ubuntu) ]]; then
 			apt-get install -y unbound
@@ -120,43 +128,43 @@ access-control: 10.8.0.1/24 allow
 hide-identity: yes
 hide-version: yes
 use-caps-for-id: yes
-prefetch: yes' >>/etc/unbound/unbound.conf
+prefetch: yes' >>$UNBOUND_CONF
 
 		elif [[ $OS =~ (centos|amzn|oracle) ]]; then
 			yum install -y unbound
 
 			# Configuration
-			sed -i 's|# interface: 0.0.0.0$|interface: 10.8.0.1|' /etc/unbound/unbound.conf
-			sed -i 's|# access-control: 127.0.0.0/8 allow|access-control: 10.8.0.1/24 allow|' /etc/unbound/unbound.conf
-			sed -i 's|# hide-identity: no|hide-identity: yes|' /etc/unbound/unbound.conf
-			sed -i 's|# hide-version: no|hide-version: yes|' /etc/unbound/unbound.conf
-			sed -i 's|use-caps-for-id: no|use-caps-for-id: yes|' /etc/unbound/unbound.conf
+			sed -i 's|# interface: 0.0.0.0$|interface: 10.8.0.1|' $UNBOUND_CONF
+			sed -i 's|# access-control: 127.0.0.0/8 allow|access-control: 10.8.0.1/24 allow|' $UNBOUND_CONF
+			sed -i 's|# hide-identity: no|hide-identity: yes|' $UNBOUND_CONF
+			sed -i 's|# hide-version: no|hide-version: yes|' $UNBOUND_CONF
+			sed -i 's|use-caps-for-id: no|use-caps-for-id: yes|' $UNBOUND_CONF
 
 		elif [[ $OS == "fedora" ]]; then
 			dnf install -y unbound
 
 			# Configuration
-			sed -i 's|# interface: 0.0.0.0$|interface: 10.8.0.1|' /etc/unbound/unbound.conf
-			sed -i 's|# access-control: 127.0.0.0/8 allow|access-control: 10.8.0.1/24 allow|' /etc/unbound/unbound.conf
-			sed -i 's|# hide-identity: no|hide-identity: yes|' /etc/unbound/unbound.conf
-			sed -i 's|# hide-version: no|hide-version: yes|' /etc/unbound/unbound.conf
-			sed -i 's|# use-caps-for-id: no|use-caps-for-id: yes|' /etc/unbound/unbound.conf
+			sed -i 's|# interface: 0.0.0.0$|interface: 10.8.0.1|' $UNBOUND_CONF
+			sed -i 's|# access-control: 127.0.0.0/8 allow|access-control: 10.8.0.1/24 allow|' $UNBOUND_CONF
+			sed -i 's|# hide-identity: no|hide-identity: yes|' $UNBOUND_CONF
+			sed -i 's|# hide-version: no|hide-version: yes|' $UNBOUND_CONF
+			sed -i 's|# use-caps-for-id: no|use-caps-for-id: yes|' $UNBOUND_CONF
 
 		elif [[ $OS == "arch" ]]; then
 			pacman -Syu --noconfirm unbound
 
 			# Get root servers list
-			curl -o /etc/unbound/root.hints https://www.internic.net/domain/named.cache
+			curl -o "$UNBOUND_ROOT/root.hints" https://www.internic.net/domain/named.cache
 
-			if [[ ! -f /etc/unbound/unbound.conf.old ]]; then
-				mv /etc/unbound/unbound.conf /etc/unbound/unbound.conf.old
+			if [[ ! -f "$UNBOUND_CONF.old" ]]; then
+				mv $UNBOUND_CONF "$UNBOUND_CONF.old"
 			fi
 
 			echo 'server:
 	use-syslog: yes
 	do-daemonize: no
 	username: "unbound"
-	directory: "/etc/unbound"
+	directory: $UNBOUND_ROOT
 	trust-anchor-file: trusted-key.key
 	root-hints: root.hints
 	interface: 10.8.0.1
@@ -168,13 +176,13 @@ prefetch: yes' >>/etc/unbound/unbound.conf
 	hide-identity: yes
 	hide-version: yes
 	qname-minimisation: yes
-	prefetch: yes' >/etc/unbound/unbound.conf
+	prefetch: yes' >$UNBOUND_CONF
 		fi
 
 		# IPv6 DNS for all OS
 		if [[ $IPV6_SUPPORT == 'y' ]]; then
 			echo 'interface: fd42:42:42:42::1
-access-control: fd42:42:42:42::/112 allow' >>/etc/unbound/unbound.conf
+access-control: fd42:42:42:42::/112 allow' >>$UNBOUND_CONF
 		fi
 
 		if [[ ! $OS =~ (fedora|centos|amzn|oracle) ]]; then
@@ -187,10 +195,10 @@ private-address: 169.254.0.0/16
 private-address: fd00::/8
 private-address: fe80::/10
 private-address: 127.0.0.0/8
-private-address: ::ffff:0:0/96" >>/etc/unbound/unbound.conf
+private-address: ::ffff:0:0/96" >>$UNBOUND_CONF
 		fi
 	else # Unbound is already installed
-		echo 'include: /etc/unbound/openvpn.conf' >>/etc/unbound/unbound.conf
+		echo 'include: $UNBOUND_OPENVPN_CONF' >>$UNBOUND_CONF
 
 		# Add Unbound 'server' for the OpenVPN subnet
 		echo 'server:
@@ -208,10 +216,10 @@ private-address: 169.254.0.0/16
 private-address: fd00::/8
 private-address: fe80::/10
 private-address: 127.0.0.0/8
-private-address: ::ffff:0:0/96' >/etc/unbound/openvpn.conf
+private-address: ::ffff:0:0/96' >$UNBOUND_OPENVPN_CONF
 		if [[ $IPV6_SUPPORT == 'y' ]]; then
 			echo 'interface: fd42:42:42:42::1
-access-control: fd42:42:42:42::/112 allow' >>/etc/unbound/openvpn.conf
+access-control: fd42:42:42:42::/112 allow' >>$UNBOUND_OPENVPN_CONF
 		fi
 	fi
 
@@ -380,11 +388,11 @@ function askDNS() {
 	until [[ $DNS =~ ^[0-9]+$ ]] && [ "$DNS" -ge 1 ] && [ "$DNS" -le 13 ]; do
 		read -rp "DNS [1-12]: " -e -i 11 DNS
 
-		if [[ $DNS == 2 ]] && [[ -e /etc/unbound/unbound.conf ]]; then
+		if [[ $DNS == 2 ]] && [[ -e $UNBOUND_CONF ]]; then
 			echo ""
 			echo "Unbound is already installed."
 			echo "You can allow the script to configure it in order to use it from your OpenVPN clients"
-			echo "We will simply add a second server to /etc/unbound/unbound.conf for the OpenVPN subnet."
+			echo "We will simply add a second server to $UNBOUND_CONF for the OpenVPN subnet."
 			echo "No changes are made to the current configuration."
 			echo ""
 
@@ -668,7 +676,7 @@ function installOpenVPNPackages() {
 	# If OpenVPN isn't installed yet, install it. This script is more-or-less
 	# idempotent on multiple runs, but will only install OpenVPN from upstream
 	# the first time.
-	if [[ ! -e /etc/openvpn/server.conf ]]; then
+	if [[ ! -e $SERVER_CONF ]]; then
 		if [[ $OS =~ (debian|ubuntu) ]]; then
 			apt-get update
 			apt-get -y install ca-certificates gnupg
@@ -703,8 +711,8 @@ function installOpenVPNPackages() {
 
 function removeEasyRsaFolder() {
     # An old version of easy-rsa was available by default in some openvpn packages
-    if [[ -d /etc/openvpn/easy-rsa/ ]]; then
-        rm -rf /etc/openvpn/easy-rsa/
+    if [[ -d "$EASYRSA_ROOT/" ]]; then
+        rm -rf "$EASYRSA_ROOT/"
     fi
 }
 
@@ -751,16 +759,16 @@ function installEasyRSA() {
     echo "Using EasyRSA version: $easyrsa_version"
 
     wget -O /tmp/easy-rsa.tgz "https://github.com/OpenVPN/easy-rsa/releases/download/v${easyrsa_version}/EasyRSA-${easyrsa_version}.tgz"
-    mkdir -p /etc/openvpn/easy-rsa
-    tar xzf /tmp/easy-rsa.tgz --strip-components=1 --no-same-owner --directory /etc/openvpn/easy-rsa
+    mkdir -p "$EASYRSA_ROOT"
+    tar xzf /tmp/easy-rsa.tgz --strip-components=1 --no-same-owner --directory "$EASYRSA_ROOT"
     rm -f /tmp/easy-rsa.tgz
 }
 
 function setupEasyRSA() {
 	# Install the latest version of easy-rsa from source, if not already installed.
-	if [[ ! -d /etc/openvpn/easy-rsa/ ]]; then
+	if [[ ! -d "$EASYRSA_ROOT/" ]]; then
 
-		cd /etc/openvpn/easy-rsa/ || return
+		cd "$EASYRSA_ROOT/" || return
 		case $CERT_TYPE in
 		1)
 			echo "set_var EASYRSA_ALGO ec" >vars
@@ -792,30 +800,30 @@ function setupEasyRSA() {
 		case $TLS_SIG in
 		1)
 			# Generate tls-crypt key
-			openvpn --genkey --secret /etc/openvpn/tls-crypt.key
+			openvpn --genkey --secret "$OPENVPN_ROOT/tls-crypt.key"
 			;;
 		2)
 			# Generate tls-auth key
-			openvpn --genkey --secret /etc/openvpn/tls-auth.key
+			openvpn --genkey --secret "$OPENVPN_ROOT/tls-auth.key"
 			;;
 		esac
 	else
 		# If easy-rsa is already installed, grab the generated SERVER_NAME
 		# for client configs
-		cd /etc/openvpn/easy-rsa/ || return
+		cd "$EASYRSA_ROOT/" || return
 		SERVER_NAME=$(cat SERVER_NAME_GENERATED)
 	fi
 }
 
 function setupCertificates() {
 	# Move all the generated files
-	cp pki/ca.crt pki/private/ca.key "pki/issued/$SERVER_NAME.crt" "pki/private/$SERVER_NAME.key" /etc/openvpn/easy-rsa/pki/crl.pem /etc/openvpn
+	cp pki/ca.crt pki/private/ca.key "pki/issued/$SERVER_NAME.crt" "pki/private/$SERVER_NAME.key" "$EASYRSA_PKI/crl.pem" $OPENVPN_ROOT
 	if [[ $DH_TYPE == "2" ]]; then
-		cp dh.pem /etc/openvpn
+		cp dh.pem $OPENVPN_ROOT
 	fi
 
 	# Make cert revocation list readable for non-root
-	chmod 644 /etc/openvpn/crl.pem
+	chmod 644 "$OPENVPN_ROOT/crl.pem"
 }
 
 function writeServerConfigHeader() {
@@ -885,7 +893,7 @@ EOF
 }
 
 function generateServerConfig() {
-    local outfile="/etc/openvpn/server.conf"
+    local outfile="$SERVER_CONF"
     writeServerConfigHeader "$outfile"
 
     [[ $COMPRESSION_ENABLED == "y" ]] && echo "compress $COMPRESSION_ALG" >>"$outfile"
@@ -912,7 +920,7 @@ ncp-ciphers $CIPHER
 tls-server
 tls-version-min 1.2
 tls-cipher $CC_CIPHER
-client-config-dir /etc/openvpn/ccd
+client-config-dir $OPENVPN_ROOT/ccd
 status /var/log/openvpn/status.log
 verb 3
 EOF
@@ -924,15 +932,15 @@ function updateServerConfigHead() {
     writeServerConfigHeader "$tmpfile"
 
     local tail_start
-    tail_start=$(grep -n -m1 -E '^(compress|dh )' /etc/openvpn/server.conf | cut -d: -f1)
-    [[ -n $tail_start ]] && tail -n +"$tail_start" /etc/openvpn/server.conf >>"$tmpfile"
+    tail_start=$(grep -n -m1 -E '^(compress|dh )' $SERVER_CONF | cut -d: -f1)
+    [[ -n $tail_start ]] && tail -n +"$tail_start" $SERVER_CONF >>"$tmpfile"
 
-    mv "$tmpfile" /etc/openvpn/server.conf
+    mv "$tmpfile" $SERVER_CONF
 }
 
 function prepareSystem() {
 	# Create client-config-dir dir
-	mkdir -p /etc/openvpn/ccd
+	mkdir -p "$OPENVPN_ROOT/ccd"
 	# Create log dir
 	mkdir -p /var/log/openvpn
 
@@ -973,7 +981,7 @@ function prepareOpenVPNService() {
     if [[ -n "$service_source" ]]; then
         cp "$service_source" "$service_dest"
         sed -i 's|LimitNPROC|#LimitNPROC|' "$service_dest"
-        sed -i 's|/etc/openvpn/server|/etc/openvpn|' "$service_dest"
+        sed -i 's|$OPENVPN_ROOT/server|$OPENVPN_ROOT|' "$service_dest"
         systemctl daemon-reload
     fi
 
@@ -1072,7 +1080,7 @@ function writeClientTemplateHeader() {
 }
 
 function createClientTemplate() {
-    local outfile="/etc/openvpn/client-template.txt"
+    local outfile="$OPENVPN_ROOT/client-template.txt"
 
     writeClientTemplateHeader "$outfile"
 
@@ -1105,10 +1113,10 @@ function updateClientTemplateHead() {
     writeClientTemplateHeader "$tmpfile"
 
     local tail_start
-    tail_start=$(grep -n -m1 '^dev tun' /etc/openvpn/client-template.txt | cut -d: -f1)
-    [[ -n $tail_start ]] && tail -n +"$tail_start" /etc/openvpn/client-template.txt >>"$tmpfile"
+    tail_start=$(grep -n -m1 '^dev tun' "$OPENVPN_ROOT/client-template.txt" | cut -d: -f1)
+    [[ -n $tail_start ]] && tail -n +"$tail_start" "$OPENVPN_ROOT/client-template.txt" >>"$tmpfile"
 
-    mv "$tmpfile" /etc/openvpn/client-template.txt
+    mv "$tmpfile" "$OPENVPN_ROOT/client-template.txt"
 }
 
 function installOpenVPN() {
@@ -1155,7 +1163,7 @@ function restartOrReloadServices() {
     echo "Validating OpenVPN configuration..."
     if command -v openvpn >/dev/null 2>&1; then
         if openvpn --help 2>&1 | grep -q -- '--test-parse'; then
-            openvpn --config /etc/openvpn/server.conf --test-parse || echo "Warning: Syntax error detected in configuration."
+            openvpn --config $SERVER_CONF --test-parse || echo "Warning: Syntax error detected in configuration."
         else
             echo "Skipping syntax check — feature not supported by this build."
         fi
@@ -1204,13 +1212,13 @@ function newClient() {
 		read -rp "Select an option [1-2]: " -e -i 1 PASS
 	done
 
-	CLIENTEXISTS=$(tail -n +2 /etc/openvpn/easy-rsa/pki/index.txt | grep -c -E "/CN=$CLIENT\$")
+	CLIENTEXISTS=$(tail -n +2 "$EASYRSA_PKI/index.txt" | grep -c -E "/CN=$CLIENT\$")
 	if [[ $CLIENTEXISTS == '1' ]]; then
 		echo ""
 		echo "The specified client CN was already found in easy-rsa, please choose another name."
 		exit
 	else
-		cd /etc/openvpn/easy-rsa/ || return
+		cd "$EASYRSA_ROOT/" || return
 		case $PASS in
 		1)
 			EASYRSA_CERT_EXPIRE=3650 ./easyrsa --batch build-client-full "$CLIENT" nopass
@@ -1241,37 +1249,37 @@ function newClient() {
 	fi
 
 	# Determine if we use tls-auth or tls-crypt
-	if grep -qs "^tls-crypt" /etc/openvpn/server.conf; then
+	if grep -qs "^tls-crypt" $SERVER_CONF; then
 		TLS_SIG="1"
-	elif grep -qs "^tls-auth" /etc/openvpn/server.conf; then
+	elif grep -qs "^tls-auth" $SERVER_CONF; then
 		TLS_SIG="2"
 	fi
 
 	# Generates the custom client.ovpn
-	cp /etc/openvpn/client-template.txt "$homeDir/$CLIENT.ovpn"
+	cp "$OPENVPN_ROOT/client-template.txt" "$homeDir/$CLIENT.ovpn"
 	{
 		echo "<ca>"
-		cat "/etc/openvpn/easy-rsa/pki/ca.crt"
+		cat "$EASYRSA_PKI/ca.crt"
 		echo "</ca>"
 
 		echo "<cert>"
-		awk '/BEGIN/,/END CERTIFICATE/' "/etc/openvpn/easy-rsa/pki/issued/$CLIENT.crt"
+		awk '/BEGIN/,/END CERTIFICATE/' "$EASYRSA_PKI/issued/$CLIENT.crt"
 		echo "</cert>"
 
 		echo "<key>"
-		cat "/etc/openvpn/easy-rsa/pki/private/$CLIENT.key"
+		cat "$EASYRSA_PKI/private/$CLIENT.key"
 		echo "</key>"
 
 		case $TLS_SIG in
 		1)
 			echo "<tls-crypt>"
-			cat /etc/openvpn/tls-crypt.key
+			cat "$OPENVPN_ROOT/tls-crypt.key"
 			echo "</tls-crypt>"
 			;;
 		2)
 			echo "key-direction 1"
 			echo "<tls-auth>"
-			cat /etc/openvpn/tls-auth.key
+			cat "$OPENVPN_ROOT/tls-auth.key"
 			echo "</tls-auth>"
 			;;
 		esac
@@ -1285,7 +1293,7 @@ function newClient() {
 }
 
 function selectClient() {
-    local INDEX_FILE="/etc/openvpn/easy-rsa/pki/index.txt"
+    local INDEX_FILE="$EASYRSA_PKI/index.txt"
     local MODE="$1"  # "valid" or "all"
     local CLIENTS=()
     local i=1
@@ -1296,12 +1304,12 @@ function selectClient() {
             tail -n +2 "$INDEX_FILE" | grep "^V" | cut -d '=' -f 2
         )
     else
-        for CRT in /etc/openvpn/easy-rsa/pki/issued/*.crt; do
+        for CRT in "$EASYRSA_PKI/issued/*.crt"; do
             local NAME=$(basename "$CRT" .crt)
             [[ "$NAME" =~ ^server_[[:alnum:]]+$ ]] && continue
             [[ "$NAME" == "server" ]] && continue
 
-            local KEY="/etc/openvpn/easy-rsa/pki/private/${NAME}.key"
+            local KEY="$EASYRSA_PKI/private/${NAME}.key"
             [[ ! -f "$KEY" ]] && continue
 
             local SERIAL=$(openssl x509 -serial -noout -in "$CRT" | cut -d= -f2)
@@ -1424,7 +1432,7 @@ function revokeClient() {
         return
     fi
 
-    cd /etc/openvpn/easy-rsa/ || return
+    cd "$EASYRSA_ROOT/" || return
 
     for CLIENT in "${SELECTED_CLIENTS[@]}"; do
         ./easyrsa --batch revoke "$CLIENT"
@@ -1432,17 +1440,17 @@ function revokeClient() {
     done
 
     EASYRSA_CRL_DAYS=3650 ./easyrsa gen-crl
-    rm -f /etc/openvpn/crl.pem
-    cp /etc/openvpn/easy-rsa/pki/crl.pem /etc/openvpn/crl.pem
-    chmod 644 /etc/openvpn/crl.pem
+    rm -f "$OPENVPN_ROOT/crl.pem"
+    cp "$EASYRSA_PKI/crl.pem" "$OPENVPN_ROOT/crl.pem"
+    chmod 644 "$OPENVPN_ROOT/crl.pem"
 
     for CLIENT in "${SELECTED_CLIENTS[@]}"; do
         find /home/ -maxdepth 2 -name "$CLIENT.ovpn" -delete
         rm -f "/root/$CLIENT.ovpn"
-        sed -i "/^$CLIENT,.*/d" /etc/openvpn/ipp.txt
+        sed -i "/^$CLIENT,.*/d" "$OPENVPN_ROOT/ipp.txt"
     done
 
-    cp /etc/openvpn/easy-rsa/pki/index.txt{,.bk}
+    cp "$EASYRSA_PKI/index.txt{,.bk}"
 
     echo "Clients revoked: ${SELECTED_CLIENTS[*]}"
 
@@ -1465,9 +1473,9 @@ function restoreClientConfig() {
         return
     fi
 
-    if grep -qs "^tls-crypt" /etc/openvpn/server.conf; then
+    if grep -qs "^tls-crypt" $SERVER_CONF; then
         TLS_SIG="1"
-    elif grep -qs "^tls-auth" /etc/openvpn/server.conf; then
+    elif grep -qs "^tls-auth" $SERVER_CONF; then
         TLS_SIG="2"
     fi
 
@@ -1486,30 +1494,30 @@ function restoreClientConfig() {
         fi
 
         # Create client config
-        cp /etc/openvpn/client-template.txt "$homeDir/$CLIENT.ovpn"
+        cp "$OPENVPN_ROOT/client-template.txt" "$homeDir/$CLIENT.ovpn"
         {
             echo "<ca>"
-            cat "/etc/openvpn/easy-rsa/pki/ca.crt"
+            cat "$EASYRSA_PKI/ca.crt"
             echo "</ca>"
 
             echo "<cert>"
-            awk '/BEGIN/,/END CERTIFICATE/' "/etc/openvpn/easy-rsa/pki/issued/$CLIENT.crt"
+            awk '/BEGIN/,/END CERTIFICATE/' "$EASYRSA_PKI/issued/$CLIENT.crt"
             echo "</cert>"
 
             echo "<key>"
-            cat "/etc/openvpn/easy-rsa/pki/private/$CLIENT.key"
+            cat "$EASYRSA_PKI/private/$CLIENT.key"
             echo "</key>"
 
             case $TLS_SIG in
             1)
                 echo "<tls-crypt>"
-                cat /etc/openvpn/tls-crypt.key
+                cat "$OPENVPN_ROOT/tls-crypt.key"
                 echo "</tls-crypt>"
                 ;;
             2)
                 echo "key-direction 1"
                 echo "<tls-auth>"
-                cat /etc/openvpn/tls-auth.key
+                cat "$OPENVPN_ROOT/tls-auth.key"
                 echo "</tls-auth>"
                 ;;
             esac
@@ -1521,8 +1529,8 @@ function restoreClientConfig() {
 
 function removeUnbound() {
 	# Remove OpenVPN-related config
-	sed -i '/include: \/etc\/unbound\/openvpn.conf/d' /etc/unbound/unbound.conf
-	rm /etc/unbound/openvpn.conf
+	sed -i '/include: \/etc\/unbound\/openvpn.conf/d' $UNBOUND_CONF
+	rm $UNBOUND_OPENVPN_CONF
 
 	until [[ $REMOVE_UNBOUND =~ (y|n) ]]; do
 		echo ""
@@ -1544,7 +1552,7 @@ function removeUnbound() {
 			dnf remove -y unbound
 		fi
 
-		rm -rf /etc/unbound/
+		rm -rf "$UNBOUND_ROOT/"
 
 		echo ""
 		echo "Unbound removed!"
@@ -1560,10 +1568,10 @@ function backupOpenvpn() {
     mkdir -p "$BACKUP_DIR"
     FINAL_ARCHIVE="$BACKUP_DIR/openvpn-backup-$(date +%F_%H-%M-%S).tar.gz"
     TMP_DIR=$(mktemp -d)
-    rsync -a --exclude='easy-rsa' /etc/openvpn "$TMP_DIR/etc/"
-    if [[ -d /etc/openvpn/easy-rsa/pki ]]; then
-        mkdir -p "$TMP_DIR/etc/openvpn/easy-rsa"
-        cp -a /etc/openvpn/easy-rsa/pki "$TMP_DIR/etc/openvpn/easy-rsa/"
+    rsync -a --exclude='easy-rsa' $OPENVPN_ROOT "$TMP_DIR/etc/"
+    if [[ -d "$EASYRSA_PKI" ]]; then
+        mkdir -p "$TMP_DIR$EASYRSA_ROOT"
+        cp -a "$EASYRSA_PKI" "$TMP_DIR$EASYRSA_ROOT/"
     fi
     tar -czf "$FINAL_ARCHIVE" -C "$TMP_DIR" etc
     rm -rf "$TMP_DIR"
@@ -1604,7 +1612,7 @@ function detect_dns_choice() {
 
 function reverseConfig() {
 
-    CONF_DIR="$TMP_DIR/etc/openvpn"
+    CONF_DIR="$TMP_DIR$OPENVPN_ROOT"
     SERVER_CONF="$CONF_DIR/server.conf"
     CLIENT_TEMPLATE="$CONF_DIR/client-template.txt"
 
@@ -1692,7 +1700,7 @@ function restoreOpenvpn() {
 		return 1
 	fi
 
-	BACKUP_SERVER_CONF="$TMP_DIR/etc/openvpn/server.conf"
+	BACKUP_SERVER_CONF="$TMP_DIR$OPENVPN_ROOT/server.conf"
 	if [[ ! -f "$BACKUP_SERVER_CONF" ]]; then
 		echo "[!] File server.conf not found in backup. Cannot proceed with restore."
 		rm -rf "$TMP_DIR"
@@ -1714,8 +1722,8 @@ function restoreOpenvpn() {
 		detectNetworkInterface
 		installOpenVPNPackages
 		detectNoGroup
-		mkdir -p /etc/openvpn
-		cp -a "$TMP_DIR/etc/openvpn/." /etc/openvpn/
+		mkdir -p $OPENVPN_ROOT
+		cp -a "$TMP_DIR$OPENVPN_ROOT/." "$OPENVPN_ROOT/"
 		updateServerConfigHead
 		installEasyRSA
 		prepareSystem
@@ -1726,10 +1734,10 @@ function restoreOpenvpn() {
 	else
 		# Restore files on existing system
 		BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
-		tar -czf "/root/openvpn_before_restore_$BACKUP_DATE.tar.gz" /etc/openvpn 2>/dev/null
+		tar -czf "/root/openvpn_before_restore_$BACKUP_DATE.tar.gz" $OPENVPN_ROOT 2>/dev/null
 		echo "Backup created: /root/openvpn_before_restore_$BACKUP_DATE.tar.gz"
-		cp -a "$TMP_DIR/etc/openvpn/." /etc/openvpn/
-		if [[ ! -x /etc/openvpn/easy-rsa/easyrsa || ! -d /etc/openvpn/easy-rsa/pki || ! -s /etc/openvpn/easy-rsa/easyrsa ]]; then
+		cp -a "$TMP_DIR$OPENVPN_ROOT/." "$OPENVPN_ROOT/"
+		if [[ ! -x "$EASYRSA_ROOT/easyrsa" || ! -d "$EASYRSA_PKI" || ! -s "$EASYRSA_ROOT/easyrsa" ]]; then
 			echo "[*] Easy-RSA not found, not executable, or damaged in target directory. Installing fresh copy..."
 			installEasyRSA
 			if [[ $? -ne 0 ]]; then
@@ -1767,8 +1775,8 @@ function removeOpenVPN() {
     read -rp "Do you really want to remove OpenVPN? [y/n]: " -e -i n REMOVE
     if [[ $REMOVE == 'y' ]]; then
         # Get OpenVPN port from the configuration
-        PORT=$(grep '^port ' /etc/openvpn/server.conf | cut -d " " -f 2)
-        PROTOCOL=$(grep '^proto ' /etc/openvpn/server.conf | cut -d " " -f 2)
+        PORT=$(grep '^port ' $SERVER_CONF | cut -d " " -f 2)
+        PROTOCOL=$(grep '^proto ' $SERVER_CONF | cut -d " " -f 2)
 
         # Stop OpenVPN
         if [[ $OS =~ (fedora|arch|centos|oracle) ]]; then
@@ -1821,13 +1829,13 @@ function removeOpenVPN() {
         # Cleanup
         find /home/ -maxdepth 2 -name "*.ovpn" -delete
         find /root/ -maxdepth 1 -name "*.ovpn" -delete
-        rm -rf /etc/openvpn
+        rm -rf $OPENVPN_ROOT
         rm -rf /usr/share/doc/openvpn*
         rm -f /etc/sysctl.d/99-openvpn.conf
         rm -rf /var/log/openvpn
 
         # Unbound
-        if [[ -e /etc/unbound/openvpn.conf ]]; then
+        if [[ -e $UNBOUND_OPENVPN_CONF ]]; then
             removeUnbound
         fi
         echo ""
@@ -1877,7 +1885,7 @@ function manageMenu() {
 
 function startUpMenu() {
 
-    if [[ -e /etc/openvpn/server.conf && $AUTO_INSTALL != "y" ]]; then
+    if [[ -e $SERVER_CONF && $AUTO_INSTALL != "y" ]]; then
         installOpenVPN
     else
         echo "Welcome to OpenVPN-install!"
@@ -1905,7 +1913,7 @@ function startUpMenu() {
 initialCheck
 
 # Check if OpenVPN is already installed
-if [[ -e /etc/openvpn/server.conf && $AUTO_INSTALL != "y" ]]; then
+if [[ -e $SERVER_CONF && $AUTO_INSTALL != "y" ]]; then
     manageMenu
 else
     startUpMenu
