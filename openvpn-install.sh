@@ -729,16 +729,14 @@ function getOpenVPNVersion() {
 
 function selectEasyRSAVersion() {
     local ovpn_version=$1
-    local major=${ovpn_version%%.*}        # 2 из 2.5.9
+    local major=${ovpn_version%%.*}
     local minor=${ovpn_version#*.}
-    minor=${minor%%.*}                     # 5 из 5.9
+    minor=${minor%%.*}
 
-    # Логика выбора версии EasyRSA
     if (( major > 2 )) || { (( major == 2 )) && (( minor >= 4 )); }; then
         # OpenVPN 2.4+ -> EasyRSA 3.x
         echo "3.1.2"
     else
-        # Старые версии OpenVPN -> EasyRSA 2.2.2 (пример)
         echo "2.2.2"
     fi
 }
@@ -1067,7 +1065,6 @@ function writeClientTemplateHeader() {
         echo "proto tcp-client" >>"$outfile"
     fi
 
-    # Если сервер за NAT — используем ENDPOINT
     local ip_to_use="$IP"
     [[ -n $ENDPOINT ]] && ip_to_use="$ENDPOINT"
 
@@ -1107,7 +1104,6 @@ function updateClientTemplateHead() {
 
     writeClientTemplateHeader "$tmpfile"
 
-    # Подхватываем "хвост" начиная с dev tun
     local tail_start
     tail_start=$(grep -n -m1 '^dev tun' /etc/openvpn/client-template.txt | cut -d: -f1)
     [[ -n $tail_start ]] && tail -n +"$tail_start" /etc/openvpn/client-template.txt >>"$tmpfile"
