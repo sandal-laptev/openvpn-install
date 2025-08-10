@@ -820,16 +820,18 @@ function setupCertificates() {
 	chmod 644 /etc/openvpn/crl.pem
 }
 
-function generateServerConfig() {
-	# Generate server.conf
-	echo "port $PORT" >/etc/openvpn/server.conf
-	if [[ $IPV6_SUPPORT == 'n' ]]; then
-		echo "proto $PROTOCOL" >>/etc/openvpn/server.conf
-	elif [[ $IPV6_SUPPORT == 'y' ]]; then
-		echo "proto ${PROTOCOL}6" >>/etc/openvpn/server.conf
-	fi
+function writeServerConfigHeader() {
+    local outfile="$1"
 
-	echo "dev tun
+    echo "port $PORT" >"$outfile"
+    if [[ $IPV6_SUPPORT == 'n' ]]; then
+        echo "proto $PROTOCOL" >>"$outfile"
+    else
+        echo "proto ${PROTOCOL}6" >>"$outfile"
+    fi
+
+    cat >>"$outfile" <<EOF
+dev tun
 user nobody
 group $NOGROUP
 persist-key
@@ -837,111 +839,72 @@ persist-tun
 keepalive 10 120
 topology subnet
 server 10.8.0.0 255.255.255.0
-ifconfig-pool-persist ipp.txt" >>/etc/openvpn/server.conf
+ifconfig-pool-persist ipp.txt
+EOF
 
-	# DNS resolvers
-	case $DNS in
-	1) # Current system resolvers
-		# Locate the proper resolv.conf
-		# Needed for systems running systemd-resolved
-		if grep -q "127.0.0.53" "/etc/resolv.conf"; then
-			RESOLVCONF='/run/systemd/resolve/resolv.conf'
-		else
-			RESOLVCONF='/etc/resolv.conf'
-		fi
-		# Obtain the resolvers from resolv.conf and use them for OpenVPN
-		sed -ne 's/^nameserver[[:space:]]\+\([^[:space:]]\+\).*$/\1/p' $RESOLVCONF | while read -r line; do
-			# Copy, if it's a IPv4 |or| if IPv6 is enabled, IPv4/IPv6 does not matter
-			if [[ $line =~ ^[0-9.]*$ ]] || [[ $IPV6_SUPPORT == 'y' ]]; then
-				echo "push \"dhcp-option DNS $line\"" >>/etc/openvpn/server.conf
-			fi
-		done
-		;;
-	2) # Self-hosted DNS resolver (Unbound)
-		echo 'push "dhcp-option DNS 10.8.0.1"' >>/etc/openvpn/server.conf
-		if [[ $IPV6_SUPPORT == 'y' ]]; then
-			echo 'push "dhcp-option DNS fd42:42:42:42::1"' >>/etc/openvpn/server.conf
-		fi
-		;;
-	3) # Cloudflare
-		echo 'push "dhcp-option DNS 1.0.0.1"' >>/etc/openvpn/server.conf
-		echo 'push "dhcp-option DNS 1.1.1.1"' >>/etc/openvpn/server.conf
-		;;
-	4) # Quad9
-		echo 'push "dhcp-option DNS 9.9.9.9"' >>/etc/openvpn/server.conf
-		echo 'push "dhcp-option DNS 149.112.112.112"' >>/etc/openvpn/server.conf
-		;;
-	5) # Quad9 uncensored
-		echo 'push "dhcp-option DNS 9.9.9.10"' >>/etc/openvpn/server.conf
-		echo 'push "dhcp-option DNS 149.112.112.10"' >>/etc/openvpn/server.conf
-		;;
-	6) # FDN
-		echo 'push "dhcp-option DNS 80.67.169.40"' >>/etc/openvpn/server.conf
-		echo 'push "dhcp-option DNS 80.67.169.12"' >>/etc/openvpn/server.conf
-		;;
-	7) # DNS.WATCH
-		echo 'push "dhcp-option DNS 84.200.69.80"' >>/etc/openvpn/server.conf
-		echo 'push "dhcp-option DNS 84.200.70.40"' >>/etc/openvpn/server.conf
-		;;
-	8) # OpenDNS
-		echo 'push "dhcp-option DNS 208.67.222.222"' >>/etc/openvpn/server.conf
-		echo 'push "dhcp-option DNS 208.67.220.220"' >>/etc/openvpn/server.conf
-		;;
-	9) # Google
-		echo 'push "dhcp-option DNS 8.8.8.8"' >>/etc/openvpn/server.conf
-		echo 'push "dhcp-option DNS 8.8.4.4"' >>/etc/openvpn/server.conf
-		;;
-	10) # Yandex Basic
-		echo 'push "dhcp-option DNS 77.88.8.8"' >>/etc/openvpn/server.conf
-		echo 'push "dhcp-option DNS 77.88.8.1"' >>/etc/openvpn/server.conf
-		;;
-	11) # AdGuard DNS
-		echo 'push "dhcp-option DNS 94.140.14.14"' >>/etc/openvpn/server.conf
-		echo 'push "dhcp-option DNS 94.140.15.15"' >>/etc/openvpn/server.conf
-		;;
-	12) # NextDNS
-		echo 'push "dhcp-option DNS 45.90.28.167"' >>/etc/openvpn/server.conf
-		echo 'push "dhcp-option DNS 45.90.30.167"' >>/etc/openvpn/server.conf
-		;;
-	13) # Custom DNS
-		echo "push \"dhcp-option DNS $DNS1\"" >>/etc/openvpn/server.conf
-		if [[ $DNS2 != "" ]]; then
-			echo "push \"dhcp-option DNS $DNS2\"" >>/etc/openvpn/server.conf
-		fi
-		;;
-	esac
-	echo 'push "redirect-gateway def1 bypass-dhcp"' >>/etc/openvpn/server.conf
+    case $DNS in
+        1)
+            if grep -q "127.0.0.53" "/etc/resolv.conf"; then
+                RESOLVCONF='/run/systemd/resolve/resolv.conf'
+            else
+                RESOLVCONF='/etc/resolv.conf'
+            fi
+            sed -ne 's/^nameserver[[:space:]]\+\([^[:space:]]\+\).*$/\1/p' "$RESOLVCONF" | \
+            while read -r line; do
+                if [[ $line =~ ^[0-9.]*$ ]] || [[ $IPV6_SUPPORT == 'y' ]]; then
+                    echo "push \"dhcp-option DNS $line\"" >>"$outfile"
+                fi
+            done
+            ;;
+        2)  echo 'push "dhcp-option DNS 10.8.0.1"' >>"$outfile"
+            [[ $IPV6_SUPPORT == 'y' ]] && echo 'push "dhcp-option DNS fd42:42:42:42::1"' >>"$outfile"
+            ;;
+        3)  echo -e 'push "dhcp-option DNS 1.0.0.1"\npush "dhcp-option DNS 1.1.1.1"' >>"$outfile" ;;
+        4)  echo -e 'push "dhcp-option DNS 9.9.9.9"\npush "dhcp-option DNS 149.112.112.112"' >>"$outfile" ;;
+        5)  echo -e 'push "dhcp-option DNS 9.9.9.10"\npush "dhcp-option DNS 149.112.112.10"' >>"$outfile" ;;
+        6)  echo -e 'push "dhcp-option DNS 80.67.169.40"\npush "dhcp-option DNS 80.67.169.12"' >>"$outfile" ;;
+        7)  echo -e 'push "dhcp-option DNS 84.200.69.80"\npush "dhcp-option DNS 84.200.70.40"' >>"$outfile" ;;
+        8)  echo -e 'push "dhcp-option DNS 208.67.222.222"\npush "dhcp-option DNS 208.67.220.220"' >>"$outfile" ;;
+        9)  echo -e 'push "dhcp-option DNS 8.8.8.8"\npush "dhcp-option DNS 8.8.4.4"' >>"$outfile" ;;
+        10) echo -e 'push "dhcp-option DNS 77.88.8.8"\npush "dhcp-option DNS 77.88.8.1"' >>"$outfile" ;;
+        11) echo -e 'push "dhcp-option DNS 94.140.14.14"\npush "dhcp-option DNS 94.140.15.15"' >>"$outfile" ;;
+        12) echo -e 'push "dhcp-option DNS 45.90.28.167"\npush "dhcp-option DNS 45.90.30.167"' >>"$outfile" ;;
+        13) echo "push \"dhcp-option DNS $DNS1\"" >>"$outfile"
+            [[ -n $DNS2 ]] && echo "push \"dhcp-option DNS $DNS2\"" >>"$outfile"
+            ;;
+    esac
+    echo 'push "redirect-gateway def1 bypass-dhcp"' >>"$outfile"
 
-	# IPv6 network settings if needed
-	if [[ $IPV6_SUPPORT == 'y' ]]; then
-		echo 'server-ipv6 fd42:42:42:42::/112
+    if [[ $IPV6_SUPPORT == 'y' ]]; then
+        cat >>"$outfile" <<EOF
+server-ipv6 fd42:42:42:42::/112
 tun-ipv6
 push tun-ipv6
 push "route-ipv6 2000::/3"
-push "redirect-gateway ipv6"' >>/etc/openvpn/server.conf
-	fi
+push "redirect-gateway ipv6"
+EOF
+    fi
+}
 
-	if [[ $COMPRESSION_ENABLED == "y" ]]; then
-		echo "compress $COMPRESSION_ALG" >>/etc/openvpn/server.conf
-	fi
+function generateServerConfig() {
+    local outfile="/etc/openvpn/server.conf"
+    writeServerConfigHeader "$outfile"
 
-	if [[ $DH_TYPE == "1" ]]; then
-		echo "dh none" >>/etc/openvpn/server.conf
-		echo "ecdh-curve $DH_CURVE" >>/etc/openvpn/server.conf
-	elif [[ $DH_TYPE == "2" ]]; then
-		echo "dh dh.pem" >>/etc/openvpn/server.conf
-	fi
+    [[ $COMPRESSION_ENABLED == "y" ]] && echo "compress $COMPRESSION_ALG" >>"$outfile"
 
-	case $TLS_SIG in
-	1)
-		echo "tls-crypt tls-crypt.key" >>/etc/openvpn/server.conf
-		;;
-	2)
-		echo "tls-auth tls-auth.key 0" >>/etc/openvpn/server.conf
-		;;
-	esac
+    if [[ $DH_TYPE == "1" ]]; then
+        echo -e "dh none\necdh-curve $DH_CURVE" >>"$outfile"
+    else
+        echo "dh dh.pem" >>"$outfile"
+    fi
 
-	echo "crl-verify crl.pem
+    case $TLS_SIG in
+        1) echo "tls-crypt tls-crypt.key" >>"$outfile" ;;
+        2) echo "tls-auth tls-auth.key 0" >>"$outfile" ;;
+    esac
+
+    cat >>"$outfile" <<EOF
+crl-verify crl.pem
 ca ca.crt
 cert $SERVER_NAME.crt
 key $SERVER_NAME.key
@@ -953,7 +916,20 @@ tls-version-min 1.2
 tls-cipher $CC_CIPHER
 client-config-dir /etc/openvpn/ccd
 status /var/log/openvpn/status.log
-verb 3" >>/etc/openvpn/server.conf
+verb 3
+EOF
+}
+
+function updateServerConfigHead() {
+    local tmpfile
+    tmpfile=$(mktemp)
+    writeServerConfigHeader "$tmpfile"
+
+    local tail_start
+    tail_start=$(grep -n -m1 -E '^(compress|dh )' /etc/openvpn/server.conf | cut -d: -f1)
+    [[ -n $tail_start ]] && tail -n +"$tail_start" /etc/openvpn/server.conf >>"$tmpfile"
+
+    mv "$tmpfile" /etc/openvpn/server.conf
 }
 
 function prepareSystem() {
@@ -1079,21 +1055,31 @@ WantedBy=multi-user.target" >/etc/systemd/system/iptables-openvpn.service
 	systemctl start iptables-openvpn
 }
 
-function createClientTemplate() {
-	# If the server is behind a NAT, use the correct IP address for the clients to connect to
-	if [[ $ENDPOINT != "" ]]; then
-		IP=$ENDPOINT
-	fi
+function writeClientTemplateHeader() {
+    local outfile="$1"
 
-	# client-template.txt is created so we have a template to add further users later
-	echo "client" >/etc/openvpn/client-template.txt
-	if [[ $PROTOCOL == 'udp' ]]; then
-		echo "proto udp" >>/etc/openvpn/client-template.txt
-		echo "explicit-exit-notify" >>/etc/openvpn/client-template.txt
-	elif [[ $PROTOCOL == 'tcp' ]]; then
-		echo "proto tcp-client" >>/etc/openvpn/client-template.txt
-	fi
-	echo "remote $IP $PORT
+    echo "client" >"$outfile"
+
+    if [[ $PROTOCOL == 'udp' ]]; then
+        echo "proto udp" >>"$outfile"
+        echo "explicit-exit-notify" >>"$outfile"
+    elif [[ $PROTOCOL == 'tcp' ]]; then
+        echo "proto tcp-client" >>"$outfile"
+    fi
+
+    # Если сервер за NAT — используем ENDPOINT
+    local ip_to_use="$IP"
+    [[ -n $ENDPOINT ]] && ip_to_use="$ENDPOINT"
+
+    echo "remote $ip_to_use $PORT" >>"$outfile"
+}
+
+function createClientTemplate() {
+    local outfile="/etc/openvpn/client-template.txt"
+
+    writeClientTemplateHeader "$outfile"
+
+    cat >>"$outfile" <<EOF
 dev tun
 resolv-retry infinite
 nobind
@@ -1109,11 +1095,24 @@ tls-version-min 1.2
 tls-cipher $CC_CIPHER
 ignore-unknown-option block-outside-dns
 setenv opt block-outside-dns # Prevent Windows 10 DNS leak
-verb 3" >>/etc/openvpn/client-template.txt
+verb 3
+EOF
 
-	if [[ $COMPRESSION_ENABLED == "y" ]]; then
-		echo "compress $COMPRESSION_ALG" >>/etc/openvpn/client-template.txt
-	fi
+    [[ $COMPRESSION_ENABLED == "y" ]] && echo "compress $COMPRESSION_ALG" >>"$outfile"
+}
+
+function updateClientTemplateHead() {
+    local tmpfile
+    tmpfile=$(mktemp)
+
+    writeClientTemplateHeader "$tmpfile"
+
+    # Подхватываем "хвост" начиная с dev tun
+    local tail_start
+    tail_start=$(grep -n -m1 '^dev tun' /etc/openvpn/client-template.txt | cut -d: -f1)
+    [[ -n $tail_start ]] && tail -n +"$tail_start" /etc/openvpn/client-template.txt >>"$tmpfile"
+
+    mv "$tmpfile" /etc/openvpn/client-template.txt
 }
 
 function installOpenVPN() {
@@ -1578,20 +1577,30 @@ function backupOpenvpn() {
 function detect_dns_choice() {
 	local ipset="${DNS_IPS[*]}"
 
-	if [[ "$ipset" == *"8.8.8.8"* && "$ipset" == *"8.8.4.4"* ]]; then
-		echo 9
-	elif [[ "$ipset" == *"1.1.1.1"* && "$ipset" == *"1.0.0.1"* ]]; then
+	if [[ "$ipset" == *"10.8.0.1"* ]]; then
+		echo 2
+	elif [[ "$ipset" == *"fd42:42:42:42::1"* ]]; then
+		echo 2
+	elif [[ "$ipset" == *"1.0.0.1"* && "$ipset" == *"1.1.1.1"* ]]; then
 		echo 3
 	elif [[ "$ipset" == *"9.9.9.9"* && "$ipset" == *"149.112.112.112"* ]]; then
 		echo 4
-	elif [[ "$ipset" == *"77.88.8.8"* && "$ipset" == *"77.88.8.1"* ]]; then
-		echo 10
+	elif [[ "$ipset" == *"9.9.9.10"* && "$ipset" == *"149.112.112.10"* ]]; then
+		echo 5
+	elif [[ "$ipset" == *"80.67.169.40"* && "$ipset" == *"80.67.169.12"* ]]; then
+		echo 6
+	elif [[ "$ipset" == *"84.200.69.80"* && "$ipset" == *"84.200.70.40"* ]]; then
+		echo 7
 	elif [[ "$ipset" == *"208.67.222.222"* && "$ipset" == *"208.67.220.220"* ]]; then
 		echo 8
+	elif [[ "$ipset" == *"8.8.8.8"* && "$ipset" == *"8.8.4.4"* ]]; then
+		echo 9
+	elif [[ "$ipset" == *"77.88.8.8"* && "$ipset" == *"77.88.8.1"* ]]; then
+		echo 10
 	elif [[ "$ipset" == *"94.140.14.14"* && "$ipset" == *"94.140.15.15"* ]]; then
 		echo 11
-	elif [[ "$ipset" == *"10.8.0.1"* ]]; then
-		echo 2
+	elif [[ "$ipset" == *"45.90.28.167"* && "$ipset" == *"45.90.30.167"* ]]; then
+		echo 12
 	else
 		echo 13 # custom
 	fi
@@ -1612,7 +1621,7 @@ function reverseConfig() {
 
 	# Port
 	PORT=$(grep -m1 '^port ' "$SERVER_CONF" | awk '{print $2}')
-	if [[ "PORT" =~ 1194 ]]; then
+	if [[ "$PORT" == "1194" ]]; then
 		PORT_CHOICE=1
 	else
 		PORT_CHOICE=2
@@ -1645,9 +1654,9 @@ function reverseConfig() {
 
 	if [[ "$ENDPOINT" != "$ENDPOINT_FROM_BACKUP" ]]; then
 		echo "Server endpoint has changed — configuration and rules need to be updated."
-		NEED_MIGRATION="yes"
+		NEED_MIGRATION="1"
 	else
-		NEED_MIGRATION="no"
+		NEED_MIGRATION="2"
 		# Structured output for automation (key=value pairs)
 		echo "IPV6_SUPPORT=$IPV6_SUPPORT"
 		echo "PORT=$PORT"
@@ -1695,21 +1704,29 @@ function restoreOpenvpn() {
 	fi
 
 	if [[ $RESTORE_MODE == "1" ]]; then
-		# Clean install: remove existing OpenVPN, install packages, restore config
+		# Clean install: install packages, restore config
 		echo "[*] Performing clean install restore..."
 		initializeVariables
 		reverseConfig
+		if [[ $NEED_MIGRATION == "1" ]]; then
+			askServerIP
+			askIPv6
+			askPort
+			askProtocol
+			askDNS
+		fi
 		detectNetworkInterface
-        installOpenVPNPackages
-        detectNoGroup
-        mkdir -p /etc/openvpn
+		installOpenVPNPackages
+		detectNoGroup
+		mkdir -p /etc/openvpn
 		cp -a "$TMP_DIR/etc/openvpn/." /etc/openvpn/
-        installEasyRSA
-        prepareSystem
-        configureAndStartService
-        [[ $DNS == 2 ]] && installUnbound
-        setupIptablesAndService
-        createClientTemplate
+		updateServerConfigHead
+		installEasyRSA
+		prepareSystem
+		configureAndStartService
+		[[ $DNS == 2 ]] && installUnbound
+		setupIptablesAndService
+		updateClientTemplateHead
 	else
 		# Restore files on existing system
 		BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
@@ -1850,33 +1867,15 @@ function manageMenu() {
     done
 
     case $MENU_OPTION in
-        1)
-            newClient
-        ;;
-        2)
-            revokeClient
-        ;;
-        3)
-            restoreClientConfig
-        ;;
-        4)
-            activeConnections
-        ;;
-        5)
-            backupOpenvpn
-        ;;
-        6)
-            restoreOpenvpn
-        ;;
-        7)
-            restartOrReloadServices
-        ;;
-        8)
-            removeOpenVPN
-        ;;
-        9)
-            exit 0
-        ;;
+        1) newClient ;;
+        2) revokeClient ;;
+        3) restoreClientConfig ;;
+        4) activeConnections ;;
+        5) backupOpenvpn ;;
+        6) restoreOpenvpn ;;
+        7) restartOrReloadServices ;;
+        8) removeOpenVPN ;;
+        9) exit 0 ;;
     esac
 }
 
@@ -1899,15 +1898,9 @@ function startUpMenu() {
         done
 
         case $MENU_OPTION in
-            1)
-                installOpenVPN
-            ;;
-            2)
-                restoreOpenvpn
-            ;;
-            3)
-                exit 0
-            ;;
+            1) installOpenVPN ;;
+            2) restoreOpenvpn ;;
+            3) exit 0 ;;
         esac
     fi
 }
