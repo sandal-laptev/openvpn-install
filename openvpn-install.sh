@@ -762,8 +762,6 @@ function setupEasyRSA() {
 	# Install the latest version of easy-rsa from source, if not already installed.
 	if [[ ! -d /etc/openvpn/easy-rsa/ ]]; then
 
-		installEasyRSA
-
 		cd /etc/openvpn/easy-rsa/ || return
 		case $CERT_TYPE in
 		1)
@@ -1125,6 +1123,7 @@ function installOpenVPN() {
     installOpenVPNPackages
     detectNoGroup
     removeEasyRsaFolder
+    installEasyRSA
     setupEasyRSA
     setupCertificates
     generateServerConfig
@@ -1600,9 +1599,7 @@ function detect_dns_choice() {
 
 function reverseConfig() {
 
-    initializeVariables
-
-    CONF_DIR="/etc/openvpn"
+    CONF_DIR="$TMP_DIR/etc/openvpn"
     SERVER_CONF="$CONF_DIR/server.conf"
     CLIENT_TEMPLATE="$CONF_DIR/client-template.txt"
 
@@ -1615,6 +1612,11 @@ function reverseConfig() {
 
 	# Port
 	PORT=$(grep -m1 '^port ' "$SERVER_CONF" | awk '{print $2}')
+	if [[ "PORT" =~ 1194 ]]; then
+		PORT_CHOICE=1
+	else
+		PORT_CHOICE=2
+	fi
 
     # Protocol
 	PROTOCOL=$(grep -m1 '^proto ' "$SERVER_CONF" | awk '{print $2}')
@@ -1645,8 +1647,10 @@ function reverseConfig() {
 		echo "Server endpoint has changed — configuration and rules need to be updated."
 		NEED_MIGRATION="yes"
 	else
+		NEED_MIGRATION="no"
 		# Structured output for automation (key=value pairs)
 		echo "IPV6_SUPPORT=$IPV6_SUPPORT"
+		echo "PORT=$PORT"
 		echo "PORT_CHOICE=$PORT_CHOICE"
 		echo "PROTOCOL=$PROTOCOL"
 		echo "PROTOCOL_CHOICE=$PROTOCOL_CHOICE"
@@ -1657,10 +1661,6 @@ function reverseConfig() {
 			echo "DNS1=$DNS1"
 			echo "DNS2=$DNS2"
 		fi
-
-		echo "NEED_MIGRATION=$NEED_MIGRATION"
-		echo "DNS=$DNS"
-		[[ $DNS -eq 13 ]] && echo "DNS1=$DNS1" && echo "DNS2=$DNS2"
 		echo "NEED_MIGRATION=$NEED_MIGRATION"
 	fi
 }
@@ -1696,17 +1696,20 @@ function restoreOpenvpn() {
 
 	if [[ $RESTORE_MODE == "1" ]]; then
 		# Clean install: remove existing OpenVPN, install packages, restore config
-		reverseConfig
 		echo "[*] Performing clean install restore..."
-		installOpenVPNPackages
-		detectNoGroup
-		mkdir -p /etc/openvpn
+		initializeVariables
+		reverseConfig
+		detectNetworkInterface
+        installOpenVPNPackages
+        detectNoGroup
+        mkdir -p /etc/openvpn
 		cp -a "$TMP_DIR/etc/openvpn/." /etc/openvpn/
-		installEasyRSA
-		prepareSystem
-		configureAndStartService
-		setupIptablesAndService
-		createClientTemplate
+        installEasyRSA
+        prepareSystem
+        configureAndStartService
+        [[ $DNS == 2 ]] && installUnbound
+        setupIptablesAndService
+        createClientTemplate
 	else
 		# Restore files on existing system
 		BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
