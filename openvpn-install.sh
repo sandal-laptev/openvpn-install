@@ -1696,11 +1696,13 @@ function restoreOpenvpn() {
 
 	if [[ $RESTORE_MODE == "1" ]]; then
 		# Clean install: remove existing OpenVPN, install packages, restore config
+		reverseConfig
 		echo "[*] Performing clean install restore..."
 		installOpenVPNPackages
 		detectNoGroup
 		mkdir -p /etc/openvpn
 		cp -a "$TMP_DIR/etc/openvpn/." /etc/openvpn/
+		installEasyRSA
 		prepareSystem
 		configureAndStartService
 		setupIptablesAndService
