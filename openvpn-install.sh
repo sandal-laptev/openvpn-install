@@ -109,23 +109,13 @@ function checkOS() {
 	fi
 }
 
-function install_speedtest() {
+function installSpeedtest() {
 	case "$OS" in
-		debian|ubuntu)
-			sudo apt-get update && sudo apt-get install -y speedtest-cli
-			;;
-		fedora)
-			sudo dnf install -y speedtest-cli
-			;;
-		centos|oracle)
-			sudo yum install -y speedtest-cli
-			;;
-		amzn|amzn2023)
-			sudo yum install -y speedtest-cli
-			;;
-		arch)
-			sudo pacman -Sy --noconfirm speedtest-cli
-			;;
+		debian|ubuntu) apt-get update && apt-get install -y speedtest-cli ;;
+		fedora) dnf install -y speedtest-cli ;;
+		centos|oracle) yum install -y speedtest-cli ;;
+		amzn|amzn2023) yum install -y speedtest-cli ;;
+		arch) pacman -Sy --noconfirm speedtest-cli ;;
 		*)
 			echo "❌ No install method for $OS."
 			exit 1
@@ -133,10 +123,10 @@ function install_speedtest() {
 	esac
 }
 
-function run_speedtest() {
+function runSpeedtest() {
 	if ! command -v speedtest &>/dev/null && ! command -v speedtest-cli &>/dev/null; then
 		echo "⚙️ Installing speedtest-cli..."
-		install_speedtest
+		 installSpeedtest
 	fi
 
 	if command -v speedtest &>/dev/null; then
@@ -162,111 +152,93 @@ function initialCheck() {
 }
 
 function installUnbound() {
-	# If Unbound isn't installed, install it
+	case "$OS" in
+		debian|ubuntu) PM="apt-get install -y" ;;
+		centos|amzn|oracle) PM="yum install -y" ;;
+		fedora) PM="dnf install -y" ;;
+		arch) PM="pacman -Syu --noconfirm" ;;
+		*) echo "Unsupported OS: $OS"; return 1 ;;
+	esac
+
 	if [[ ! -e $UNBOUND_CONF ]]; then
+		$PM unbound
 
-		if [[ $OS =~ (debian|ubuntu) ]]; then
-			apt-get install -y unbound
-
-			# Configuration
-			echo 'interface: 10.8.0.1
-access-control: 10.8.0.1/24 allow
-hide-identity: yes
-hide-version: yes
-use-caps-for-id: yes
-prefetch: yes' >>$UNBOUND_CONF
-
-		elif [[ $OS =~ (centos|amzn|oracle) ]]; then
-			yum install -y unbound
-
-			# Configuration
-			sed -i 's|# interface: 0.0.0.0$|interface: 10.8.0.1|' $UNBOUND_CONF
-			sed -i 's|# access-control: 127.0.0.0/8 allow|access-control: 10.8.0.1/24 allow|' $UNBOUND_CONF
-			sed -i 's|# hide-identity: no|hide-identity: yes|' $UNBOUND_CONF
-			sed -i 's|# hide-version: no|hide-version: yes|' $UNBOUND_CONF
-			sed -i 's|use-caps-for-id: no|use-caps-for-id: yes|' $UNBOUND_CONF
-
-		elif [[ $OS == "fedora" ]]; then
-			dnf install -y unbound
-
-			# Configuration
-			sed -i 's|# interface: 0.0.0.0$|interface: 10.8.0.1|' $UNBOUND_CONF
-			sed -i 's|# access-control: 127.0.0.0/8 allow|access-control: 10.8.0.1/24 allow|' $UNBOUND_CONF
-			sed -i 's|# hide-identity: no|hide-identity: yes|' $UNBOUND_CONF
-			sed -i 's|# hide-version: no|hide-version: yes|' $UNBOUND_CONF
-			sed -i 's|# use-caps-for-id: no|use-caps-for-id: yes|' $UNBOUND_CONF
-
-		elif [[ $OS == "arch" ]]; then
-			pacman -Syu --noconfirm unbound
-
-			# Get root servers list
+		if [[ $OS == "arch" ]]; then
 			curl -o "$UNBOUND_ROOT/root.hints" https://www.internic.net/domain/named.cache
+		fi
 
-			if [[ ! -f "$UNBOUND_CONF.old" ]]; then
-				mv $UNBOUND_CONF "$UNBOUND_CONF.old"
-			fi
+		[[ -f "$UNBOUND_CONF" ]] && mv "$UNBOUND_CONF" "$UNBOUND_CONF.old"
 
-			echo 'server:
+		cat > "$UNBOUND_CONF" <<EOF
+server:
+	interface: 10.8.0.1
+	access-control: 10.8.0.1/24 allow
+	hide-identity: yes
+	hide-version: yes
+	use-caps-for-id: yes
+	prefetch: yes
+EOF
+
+		if [[ $IPV6_SUPPORT == 'y' ]]; then
+			cat >> "$UNBOUND_CONF" <<EOF
+	interface: fd42:42:42:42::1
+	access-control: fd42:42:42:42::/112 allow
+EOF
+		fi
+
+		cat >> "$UNBOUND_CONF" <<EOF
+	private-address: 10.0.0.0/8
+	private-address: fd42:42:42:42::/112
+	private-address: 172.16.0.0/12
+	private-address: 192.168.0.0/16
+	private-address: 169.254.0.0/16
+	private-address: fd00::/8
+	private-address: fe80::/10
+	private-address: 127.0.0.0/8
+	private-address: ::ffff:0:0/96
+EOF
+
+		if [[ $OS == "arch" ]]; then
+			cat >> "$UNBOUND_CONF" <<EOF
 	use-syslog: yes
 	do-daemonize: no
 	username: "unbound"
 	directory: $UNBOUND_ROOT
 	trust-anchor-file: trusted-key.key
 	root-hints: root.hints
-	interface: 10.8.0.1
-	access-control: 10.8.0.1/24 allow
 	port: 53
 	num-threads: 2
-	use-caps-for-id: yes
 	harden-glue: yes
+	qname-minimisation: yes
+EOF
+		fi
+
+	else
+		echo "include: $UNBOUND_OPENVPN_CONF" >> "$UNBOUND_CONF"
+
+		cat > "$UNBOUND_OPENVPN_CONF" <<EOF
+server:
+	interface: 10.8.0.1
+	access-control: 10.8.0.1/24 allow
 	hide-identity: yes
 	hide-version: yes
-	qname-minimisation: yes
-	prefetch: yes' >$UNBOUND_CONF
-		fi
+	use-caps-for-id: yes
+	prefetch: yes
+	private-address: 10.0.0.0/8
+	private-address: fd42:42:42:42::/112
+	private-address: 172.16.0.0/12
+	private-address: 192.168.0.0/16
+	private-address: 169.254.0.0/16
+	private-address: fd00::/8
+	private-address: fe80::/10
+	private-address: 127.0.0.0/8
+	private-address: ::ffff:0:0/96
+EOF
 
-		# IPv6 DNS for all OS
-		if [[ $IPV6_SUPPORT == 'y' ]]; then
-			echo 'interface: fd42:42:42:42::1
-access-control: fd42:42:42:42::/112 allow' >>$UNBOUND_CONF
-		fi
-
-		if [[ ! $OS =~ (fedora|centos|amzn|oracle) ]]; then
-			# DNS Rebinding fix
-			echo "private-address: 10.0.0.0/8
-private-address: fd42:42:42:42::/112
-private-address: 172.16.0.0/12
-private-address: 192.168.0.0/16
-private-address: 169.254.0.0/16
-private-address: fd00::/8
-private-address: fe80::/10
-private-address: 127.0.0.0/8
-private-address: ::ffff:0:0/96" >>$UNBOUND_CONF
-		fi
-	else # Unbound is already installed
-		echo 'include: $UNBOUND_OPENVPN_CONF' >>$UNBOUND_CONF
-
-		# Add Unbound 'server' for the OpenVPN subnet
-		echo 'server:
-interface: 10.8.0.1
-access-control: 10.8.0.1/24 allow
-hide-identity: yes
-hide-version: yes
-use-caps-for-id: yes
-prefetch: yes
-private-address: 10.0.0.0/8
-private-address: fd42:42:42:42::/112
-private-address: 172.16.0.0/12
-private-address: 192.168.0.0/16
-private-address: 169.254.0.0/16
-private-address: fd00::/8
-private-address: fe80::/10
-private-address: 127.0.0.0/8
-private-address: ::ffff:0:0/96' >$UNBOUND_OPENVPN_CONF
-		if [[ $IPV6_SUPPORT == 'y' ]]; then
-			echo 'interface: fd42:42:42:42::1
-access-control: fd42:42:42:42::/112 allow' >>$UNBOUND_OPENVPN_CONF
-		fi
+		[[ $IPV6_SUPPORT == 'y' ]] && cat >> "$UNBOUND_OPENVPN_CONF" <<EOF
+	interface: fd42:42:42:42::1
+	access-control: fd42:42:42:42::/112 allow
+EOF
 	fi
 
 	systemctl enable unbound
@@ -274,38 +246,28 @@ access-control: fd42:42:42:42::/112 allow' >>$UNBOUND_OPENVPN_CONF
 }
 
 function resolvePublicIP() {
-	# IP version flags, we'll use as default the IPv4
-	CURL_IP_VERSION_FLAG="-4"
-	DIG_IP_VERSION_FLAG="-4"
-
-	# Behind NAT, we'll default to the publicly reachable IPv4/IPv6.
 	if [[ $IPV6_SUPPORT == "y" ]]; then
 		CURL_IP_VERSION_FLAG=""
 		DIG_IP_VERSION_FLAG="-6"
+	else
+		CURL_IP_VERSION_FLAG="-4"
+		DIG_IP_VERSION_FLAG="-4"
 	fi
 
-	# If there is no public ip yet, we'll try to solve it using: https://api.seeip.org
-	if [[ -z $PUBLIC_IP ]]; then
-		PUBLIC_IP=$(curl -f -m 5 -sS --retry 2 --retry-connrefused "$CURL_IP_VERSION_FLAG" https://api.seeip.org 2>/dev/null)
-	fi
+	local services=(
+		"https://api.seeip.org"
+		"https://ifconfig.me"
+		"https://api.ipify.org"
+	)
 
-	# If there is no public ip yet, we'll try to solve it using: https://ifconfig.me
-	if [[ -z $PUBLIC_IP ]]; then
-		PUBLIC_IP=$(curl -f -m 5 -sS --retry 2 --retry-connrefused "$CURL_IP_VERSION_FLAG" https://ifconfig.me 2>/dev/null)
-	fi
+	for url in "${services[@]}"; do
+		PUBLIC_IP=$(curl -f -m 5 -sS --retry 2 --retry-connrefused $CURL_IP_VERSION_FLAG "$url" 2>/dev/null) && [[ -n $PUBLIC_IP ]] && break
+	done
 
-	# If there is no public ip yet, we'll try to solve it using: https://api.ipify.org
-	if [[ -z $PUBLIC_IP ]]; then
-		PUBLIC_IP=$(curl -f -m 5 -sS --retry 2 --retry-connrefused "$CURL_IP_VERSION_FLAG" https://api.ipify.org 2>/dev/null)
-	fi
-
-	# If there is no public ip yet, we'll try to solve it using: ns1.google.com
-	if [[ -z $PUBLIC_IP ]]; then
-		PUBLIC_IP=$(dig $DIG_IP_VERSION_FLAG TXT +short o-o.myaddr.l.google.com @ns1.google.com | tr -d '"')
-	fi
+	[[ -z $PUBLIC_IP ]] && PUBLIC_IP=$(dig $DIG_IP_VERSION_FLAG TXT +short o-o.myaddr.l.google.com @ns1.google.com | tr -d '"')
 
 	if [[ -z $PUBLIC_IP ]]; then
-		echo >&2 echo "Couldn't solve the public IP"
+		echo "Couldn't resolve the public IP" >&2
 		exit 1
 	fi
 
@@ -719,40 +681,50 @@ function detectNetworkInterface() {
 }
 
 function installOpenVPNPackages() {
-	# If OpenVPN isn't installed yet, install it. This script is more-or-less
-	# idempotent on multiple runs, but will only install OpenVPN from upstream
-	# the first time.
-	if [[ ! -e $SERVER_CONF ]]; then
-		if [[ $OS =~ (debian|ubuntu) ]]; then
+	if [[ -e $SERVER_CONF ]]; then
+		return 0
+	fi
+
+	case "$OS" in
+		debian|ubuntu)
 			apt-get update
-			apt-get -y install ca-certificates gnupg
-			# We add the OpenVPN repo to get the latest version.
+			apt-get install -y ca-certificates gnupg wget curl rsync iptables openssl
+
 			if [[ $VERSION_ID == "16.04" ]]; then
 				echo "deb http://build.openvpn.net/debian/openvpn/stable xenial main" >/etc/apt/sources.list.d/openvpn.list
-				wget -O - https://swupdate.openvpn.net/repos/repo-public.gpg | apt-key add -
+				wget -qO - https://swupdate.openvpn.net/repos/repo-public.gpg | apt-key add -
 				apt-get update
 			fi
-			# Ubuntu > 16.04 and Debian > 8 have OpenVPN >= 2.4 without the need of a third party repository.
-			apt-get install -y openvpn iptables openssl wget ca-certificates curl rsync
-		elif [[ $OS == 'centos' ]]; then
+
+			apt-get install -y openvpn
+			;;
+		centos)
 			yum install -y epel-release
 			yum install -y openvpn iptables openssl wget ca-certificates curl rsync tar 'policycoreutils-python*'
-		elif [[ $OS == 'oracle' ]]; then
+			;;
+		oracle)
 			yum install -y oracle-epel-release-el8
 			yum-config-manager --enable ol8_developer_EPEL
 			yum install -y openvpn iptables openssl wget ca-certificates curl rsync tar policycoreutils-python-utils
-		elif [[ $OS == 'amzn' ]]; then
+			;;
+		amzn)
 			amazon-linux-extras install -y epel
 			yum install -y openvpn iptables openssl wget ca-certificates curl rsync
-		elif [[ $OS == 'amzn2023' ]]; then
+			;;
+		amzn2023)
 			dnf install -y openvpn iptables openssl wget ca-certificates
-		elif [[ $OS == 'fedora' ]]; then
+			;;
+		fedora)
 			dnf install -y openvpn iptables openssl wget ca-certificates curl rsync policycoreutils-python-utils
-		elif [[ $OS == 'arch' ]]; then
-			# Install required dependencies and upgrade the system
+			;;
+		arch)
 			pacman --needed --noconfirm -Syu openvpn iptables openssl wget ca-certificates curl rsync
-		fi
-	fi
+			;;
+		*)
+			echo "Unsupported OS: $OS" >&2
+			return 1
+			;;
+	esac
 }
 
 function removeEasyRsaFolder() {
@@ -1000,34 +972,42 @@ function prepareSystem() {
 }
 
 function prepareOpenVPNService() {
-    # Check SELinux and configure port (if needed)
-    if hash sestatus 2>/dev/null && sestatus | grep -q "Current mode.*enforcing"; then
-        if [[ $PORT != '1194' ]]; then
+    if command -v sestatus &>/dev/null && sestatus | grep -q "Current mode.*enforcing"; then
+        if [[ $PORT != "1194" ]]; then
             semanage port -a -t openvpn_port_t -p "$PROTOCOL" "$PORT" 2>/dev/null || true
         fi
     fi
 
-    local service_source service_dest
+    local service_source service_dest service_name
 
-    if [[ $OS == 'arch' || $OS == 'fedora' || $OS == 'centos' || $OS == 'oracle' || $OS == 'amzn2023' ]]; then
-        service_source="/usr/lib/systemd/system/openvpn-server@.service"
-        service_dest="/etc/systemd/system/openvpn-server@.service"
-        service_name="openvpn-server@server"
-    elif [[ $OS == "ubuntu" && $VERSION_ID == "16.04" ]]; then
-        # For Ubuntu 16.04 with SysVInit, leave empty values
-        service_source=""
-        service_dest=""
-        service_name="openvpn"
-    else
-        service_source="/lib/systemd/system/openvpn@.service"
-        service_dest="/etc/systemd/system/openvpn@.service"
-        service_name="openvpn@server"
-    fi
+    case "$OS" in
+        arch|fedora|centos|oracle|amzn2023)
+            service_source="/usr/lib/systemd/system/openvpn-server@.service"
+            service_dest="/etc/systemd/system/openvpn-server@.service"
+            service_name="openvpn-server@server"
+            ;;
+        ubuntu)
+            if [[ $VERSION_ID == "16.04" ]]; then
+                service_source=""
+                service_dest=""
+                service_name="openvpn"
+            else
+                service_source="/lib/systemd/system/openvpn@.service"
+                service_dest="/etc/systemd/system/openvpn@.service"
+                service_name="openvpn@server"
+            fi
+            ;;
+        *)
+            service_source="/lib/systemd/system/openvpn@.service"
+            service_dest="/etc/systemd/system/openvpn@.service"
+            service_name="openvpn@server"
+            ;;
+    esac
 
-    if [[ -n "$service_source" ]]; then
+    if [[ -n "$service_source" && -f "$service_source" ]]; then
         cp "$service_source" "$service_dest"
         sed -i 's|LimitNPROC|#LimitNPROC|' "$service_dest"
-        sed -i 's|$OPENVPN_ROOT/server|$OPENVPN_ROOT|' "$service_dest"
+        sed -i "s|\$OPENVPN_ROOT/server|\$OPENVPN_ROOT|" "$service_dest"
         systemctl daemon-reload
     fi
 
@@ -1048,46 +1028,52 @@ function configureAndStartService() {
 }
 
 function setupIptablesAndService() {
-	# Add iptables rules in two scripts
-	mkdir -p $IPTABLES_ROOT
+	local add_rules=()
+	local rm_rules=()
 
-	# Script to add rules
-	echo "#!/bin/sh
-iptables -t nat -I POSTROUTING 1 -s 10.8.0.0/24 -o $NIC -j MASQUERADE
-iptables -I INPUT 1 -i tun0 -j ACCEPT
-iptables -I FORWARD 1 -i $NIC -o tun0 -j ACCEPT
-iptables -I FORWARD 1 -i tun0 -o $NIC -j ACCEPT
-iptables -I INPUT 1 -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT" >$ADD_OPENVPN_RULES
-
-	if [[ $IPV6_SUPPORT == 'y' ]]; then
-		echo "ip6tables -t nat -I POSTROUTING 1 -s fd42:42:42:42::/112 -o $NIC -j MASQUERADE
-ip6tables -I INPUT 1 -i tun0 -j ACCEPT
-ip6tables -I FORWARD 1 -i $NIC -o tun0 -j ACCEPT
-ip6tables -I FORWARD 1 -i tun0 -o $NIC -j ACCEPT
-ip6tables -I INPUT 1 -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT" >>$ADD_OPENVPN_RULES
-	fi
-
-	# Script to remove rules
-	echo "#!/bin/sh
-iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -o $NIC -j MASQUERADE
-iptables -D INPUT -i tun0 -j ACCEPT
-iptables -D FORWARD -i $NIC -o tun0 -j ACCEPT
-iptables -D FORWARD -i tun0 -o $NIC -j ACCEPT
-iptables -D INPUT -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT" >$RM_OPENVPN_RULES
+	add_rules+=(
+		"iptables -t nat -I POSTROUTING 1 -s 10.8.0.0/24 -o $NIC -j MASQUERADE"
+		"iptables -I INPUT 1 -i tun0 -j ACCEPT"
+		"iptables -I FORWARD 1 -i $NIC -o tun0 -j ACCEPT"
+		"iptables -I FORWARD 1 -i tun0 -o $NIC -j ACCEPT"
+		"iptables -I INPUT 1 -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT"
+	)
+	rm_rules+=(
+		"iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -o $NIC -j MASQUERADE"
+		"iptables -D INPUT -i tun0 -j ACCEPT"
+		"iptables -D FORWARD -i $NIC -o tun0 -j ACCEPT"
+		"iptables -D FORWARD -i tun0 -o $NIC -j ACCEPT"
+		"iptables -D INPUT -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT"
+	)
 
 	if [[ $IPV6_SUPPORT == 'y' ]]; then
-		echo "ip6tables -t nat -D POSTROUTING -s fd42:42:42:42::/112 -o $NIC -j MASQUERADE
-ip6tables -D INPUT -i tun0 -j ACCEPT
-ip6tables -D FORWARD -i $NIC -o tun0 -j ACCEPT
-ip6tables -D FORWARD -i tun0 -o $NIC -j ACCEPT
-ip6tables -D INPUT -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT" >>$RM_OPENVPN_RULES
+		add_rules+=(
+			"ip6tables -t nat -I POSTROUTING 1 -s fd42:42:42:42::/112 -o $NIC -j MASQUERADE"
+			"ip6tables -I INPUT 1 -i tun0 -j ACCEPT"
+			"ip6tables -I FORWARD 1 -i $NIC -o tun0 -j ACCEPT"
+			"ip6tables -I FORWARD 1 -i tun0 -o $NIC -j ACCEPT"
+			"ip6tables -I INPUT 1 -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT"
+		)
+		rm_rules+=(
+			"ip6tables -t nat -D POSTROUTING -s fd42:42:42:42::/112 -o $NIC -j MASQUERADE"
+			"ip6tables -D INPUT -i tun0 -j ACCEPT"
+			"ip6tables -D FORWARD -i $NIC -o tun0 -j ACCEPT"
+			"ip6tables -D FORWARD -i tun0 -o $NIC -j ACCEPT"
+			"ip6tables -D INPUT -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT"
+		)
 	fi
 
-	chmod +x $ADD_OPENVPN_RULES
-	chmod +x $RM_OPENVPN_RULES
+	mkdir -p "$IPTABLES_ROOT"
 
-	# Handle the rules via a systemd script
-	echo "[Unit]
+	# Создаём скрипты с правилами
+	printf "%s\n" "${add_rules[@]}" > "$ADD_OPENVPN_RULES"
+	printf "%s\n" "${rm_rules[@]}" > "$RM_OPENVPN_RULES"
+
+	chmod +x "$ADD_OPENVPN_RULES" "$RM_OPENVPN_RULES"
+
+	# Создаём systemd-сервис
+	cat > /etc/systemd/system/iptables-openvpn.service <<EOF
+[Unit]
 Description=iptables rules for OpenVPN
 Before=network-online.target
 Wants=network-online.target
@@ -1099,9 +1085,9 @@ ExecStop=$RM_OPENVPN_RULES
 RemainAfterExit=yes
 
 [Install]
-WantedBy=multi-user.target" >/etc/systemd/system/iptables-openvpn.service
+WantedBy=multi-user.target
+EOF
 
-	# Enable service and apply rules
 	systemctl daemon-reload
 	systemctl enable iptables-openvpn
 	systemctl start iptables-openvpn
@@ -1239,130 +1225,129 @@ function restartOrReloadServices() {
 }
 
 function newClient() {
-	echo ""
-	echo "Tell me a name for the client."
-	echo "The name must consist of alphanumeric character. It may also include an underscore or a dash."
+    echo -e "\nTell me a name for the client.
+The name must consist of alphanumeric characters and may include an underscore or a dash."
 
-	until [[ $CLIENT =~ ^[a-zA-Z0-9_-]+$ ]]; do
-		read -rp "Client name: " -e CLIENT
-	done
+    # Validate client name
+    until [[ $CLIENT =~ ^[a-zA-Z0-9_-]+$ ]]; do
+        read -rp "Client name: " -e CLIENT
+    done
 
-	echo ""
-	echo "Do you want to protect the configuration file with a password?"
-	echo "(e.g. encrypt the private key with a password)"
-	echo "   1) Add a passwordless client"
-	echo "   2) Use a password for the client"
+    echo -e "\nDo you want to protect the configuration file with a password?
+(e.g. encrypt the private key with a password)
+   1) Add a passwordless client
+   2) Use a password for the client"
 
-	until [[ $PASS =~ ^[1-2]$ ]]; do
-		read -rp "Select an option [1-2]: " -e -i 1 PASS
-	done
+    until [[ $PASS =~ ^[1-2]$ ]]; do
+        read -rp "Select an option [1-2]: " -e -i 1 PASS
+    done
 
-	CLIENTEXISTS=$(tail -n +2 "$EASYRSA_PKI/index.txt" | grep -c -E "/CN=$CLIENT\$")
-	if [[ $CLIENTEXISTS == '1' ]]; then
-		echo ""
-		echo "The specified client CN was already found in easy-rsa, please choose another name."
-		exit
-	else
-		cd "$EASYRSA_ROOT/" || return
-		case $PASS in
-		1)
-			EASYRSA_CERT_EXPIRE=3650 ./easyrsa --batch build-client-full "$CLIENT" nopass
-			;;
-		2)
-			echo "⚠️ You will be asked for the client password below ⚠️"
-			EASYRSA_CERT_EXPIRE=3650 ./easyrsa --batch build-client-full "$CLIENT"
-			;;
-		esac
-		echo "Client $CLIENT added."
-	fi
+    # Check if client already exists
+    if grep -qE "/CN=$CLIENT\$" <(tail -n +2 "$EASYRSA_PKI/index.txt"); then
+        echo -e "\nThe specified client CN already exists in easy-rsa, please choose another name."
+        exit 1
+    fi
 
-	# Home directory of the user, where the client configuration will be written
-	if [ -e "/home/${CLIENT}" ]; then
-		# if $1 is a user name
-		homeDir="/home/${CLIENT}"
-	elif [ "${SUDO_USER}" ]; then
-		# if not, use SUDO_USER
-		if [ "${SUDO_USER}" == "root" ]; then
-			# If running sudo as root
-			homeDir="/root"
-		else
-			homeDir="/home/${SUDO_USER}"
-		fi
-	else
-		# if not SUDO_USER, use /root
-		homeDir="/root"
-	fi
+    # Build client certificate
+    cd "$EASYRSA_ROOT/" || exit 1
+    EASYRSA_CERT_EXPIRE=3650 ./easyrsa --batch build-client-full "$CLIENT" $([[ $PASS -eq 1 ]] && echo "nopass")
 
-	# Determine if we use tls-auth or tls-crypt
-	if grep -qs "^tls-crypt" $SERVER_CONF; then
-		TLS_SIG="1"
-	elif grep -qs "^tls-auth" $SERVER_CONF; then
-		TLS_SIG="2"
-	fi
+    echo "Client $CLIENT added."
 
-	# Generates the custom client.ovpn
-	cp $CLIENT_TEMPLATE "$homeDir/$CLIENT.ovpn"
-	{
-		echo "<ca>"
-		cat "$EASYRSA_PKI/ca.crt"
-		echo "</ca>"
+    # Determine home directory
+    if [[ -d "/home/$CLIENT" ]]; then
+        homeDir="/home/$CLIENT"
+    elif [[ $SUDO_USER && $SUDO_USER != "root" ]]; then
+        homeDir="/home/$SUDO_USER"
+    else
+        homeDir="/root"
+    fi
 
-		echo "<cert>"
-		awk '/BEGIN/,/END CERTIFICATE/' "$EASYRSA_PKI/issued/$CLIENT.crt"
-		echo "</cert>"
+    # Determine TLS mode
+    if grep -qs "^tls-crypt" "$SERVER_CONF"; then
+        TLS_SIG="1"
+    elif grep -qs "^tls-auth" "$SERVER_CONF"; then
+        TLS_SIG="2"
+    fi
 
-		echo "<key>"
-		cat "$EASYRSA_PKI/private/$CLIENT.key"
-		echo "</key>"
+    # Create client configuration
+    local clientFile="$homeDir/$CLIENT.ovpn"
+    cp "$CLIENT_TEMPLATE" "$clientFile"
 
-		case $TLS_SIG in
-		1)
-			echo "<tls-crypt>"
-			cat "$OPENVPN_ROOT/tls-crypt.key"
-			echo "</tls-crypt>"
-			;;
-		2)
-			echo "key-direction 1"
-			echo "<tls-auth>"
-			cat "$OPENVPN_ROOT/tls-auth.key"
-			echo "</tls-auth>"
-			;;
-		esac
-	} >>"$homeDir/$CLIENT.ovpn"
+    {
+        echo "<ca>"
+        cat "$EASYRSA_PKI/ca.crt"
+        echo "</ca>"
 
-	echo ""
-	echo "The configuration file has been written to $homeDir/$CLIENT.ovpn."
-	echo "Download the .ovpn file and import it in your OpenVPN client."
+        echo "<cert>"
+        awk '/BEGIN/,/END CERTIFICATE/' "$EASYRSA_PKI/issued/$CLIENT.crt"
+        echo "</cert>"
 
-	exit 0
+        echo "<key>"
+        cat "$EASYRSA_PKI/private/$CLIENT.key"
+        echo "</key>"
+
+        case $TLS_SIG in
+            1)
+                echo "<tls-crypt>"
+                cat "$OPENVPN_ROOT/tls-crypt.key"
+                echo "</tls-crypt>"
+                ;;
+            2)
+                echo "key-direction 1"
+                echo "<tls-auth>"
+                cat "$OPENVPN_ROOT/tls-auth.key"
+                echo "</tls-auth>"
+                ;;
+        esac
+    } >>"$clientFile"
+
+    echo -e "\nThe configuration file has been written to $clientFile.
+Download the .ovpn file and import it in your OpenVPN client."
+
+    exit 0
 }
 
 function selectClient() {
-    local INDEX_FILE="$EASYRSA_PKI/index.txt"
-    local MODE="$1"  # "valid" or "all"
+    local MODE="$1"
     local CLIENTS=()
     local i=1
 
-    # Fetch list of clients
+    if [[ -z "$EASYRSA_PKI" ]]; then
+        echo "EASYRSA_PKI is not set"
+        return 1
+    fi
+
     if [[ "$MODE" == "all" ]]; then
-        mapfile -t CLIENTS < <(
-            tail -n +2 "$INDEX_FILE" | grep "^V" | cut -d '=' -f 2
-        )
+        if [[ ! -f "$EASYRSA_PKI/index.txt" ]]; then
+            echo "Index file not found: $EASYRSA_PKI/index.txt"
+            return 1
+        fi
+        mapfile -t CLIENTS < <(awk -F= '/^V/ { gsub(/^ +| +$/,"",$2); print $2 }' "$EASYRSA_PKI/index.txt")
     else
-        for CRT in "$EASYRSA_PKI/issued/*.crt"; do
-            local NAME=$(basename "$CRT" .crt)
-            [[ "$NAME" =~ ^server_[[:alnum:]]+$ ]] && continue
-            [[ "$NAME" == "server" ]] && continue
+        shopt -s nullglob
+        local certs=( "$EASYRSA_PKI/issued"/*.crt )
+        shopt -u nullglob
+
+        for CRT in "${certs[@]}"; do
+            [[ -f "$CRT" ]] || continue
+
+            local NAME
+            NAME=$(basename "$CRT" .crt)
+
+            [[ $NAME =~ ^server_[[:alnum:]]+$ ]] && continue
+            [[ $NAME == "server" ]] && continue
 
             local KEY="$EASYRSA_PKI/private/${NAME}.key"
             [[ ! -f "$KEY" ]] && continue
 
-            local SERIAL=$(openssl x509 -serial -noout -in "$CRT" | cut -d= -f2)
-            if grep -q "^R.*$SERIAL" "$INDEX_FILE"; then
+            local SERIAL
+            SERIAL=$(openssl x509 -serial -noout -in "$CRT" 2>/dev/null | cut -d= -f2)
+            if [[ -f "$EASYRSA_PKI/index.txt" ]] && grep -qi "^R.*${SERIAL}" "$EASYRSA_PKI/index.txt" 2>/dev/null; then
                 continue
             fi
 
-            if ! openssl x509 -checkend 0 -noout -in "$CRT" >/dev/null; then
+            if ! openssl x509 -checkend 0 -noout -in "$CRT" >/dev/null 2>&1; then
                 continue
             fi
 
@@ -1390,46 +1375,44 @@ function selectClient() {
         choice=()
 
         if [[ "$input" =~ ^all$ ]]; then
-            # All clients
             for ((n=1; n<=${#CLIENTS[@]}; n++)); do
                 choice+=("$n")
             done
         elif [[ "$input" =~ ^all[[:space:]]+except[[:space:]]+(.+)$ ]]; then
-            # All except specified ones
             local exclude_str="${BASH_REMATCH[1]}"
             local exclude_nums=()
             for token in $exclude_str; do
-                if [[ "$token" =~ ^[0-9]+$ ]]; then
-                    exclude_nums+=("$token")
-                elif [[ "$token" =~ ^([0-9]+)-([0-9]+)$ ]]; then
-                    start="${BASH_REMATCH[1]}"
-                    end="${BASH_REMATCH[2]}"
+                if [[ "$token" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+                    local start=${BASH_REMATCH[1]}
+                    local end=${BASH_REMATCH[2]}
                     if (( start <= end )); then
                         for ((n=start; n<=end; n++)); do
                             exclude_nums+=("$n")
                         done
                     fi
+                elif [[ "$token" =~ ^[0-9]+$ ]]; then
+                    exclude_nums+=("$token")
+                else
+                    echo "Invalid token in exclude list: $token"
                 fi
             done
-            # Fill all but excluded
             for ((n=1; n<=${#CLIENTS[@]}; n++)); do
-                skip=false
+                local skip=false
                 for ex in "${exclude_nums[@]}"; do
                     if (( n == ex )); then
                         skip=true
                         break
                     fi
                 done
-                $skip || choice+=("$n")
+                if [[ $skip == false ]]; then
+                    choice+=("$n")
+                fi
             done
         else
-            # Regular multi-selection with ranges
             for token in $input; do
-                if [[ "$token" =~ ^[0-9]+$ ]]; then
-                    choice+=("$token")
-                elif [[ "$token" =~ ^([0-9]+)-([0-9]+)$ ]]; then
-                    start="${BASH_REMATCH[1]}"
-                    end="${BASH_REMATCH[2]}"
+                if [[ "$token" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+                    local start=${BASH_REMATCH[1]}
+                    local end=${BASH_REMATCH[2]}
                     if (( start <= end )); then
                         for ((n=start; n<=end; n++)); do
                             choice+=("$n")
@@ -1439,6 +1422,8 @@ function selectClient() {
                         choice=()
                         break
                     fi
+                elif [[ "$token" =~ ^[0-9]+$ ]]; then
+                    choice+=("$token")
                 else
                     echo "Invalid input: $token"
                     choice=()
@@ -1447,9 +1432,13 @@ function selectClient() {
             done
         fi
 
-        # Validate numbers
         local valid=true
         for num in "${choice[@]}"; do
+            if ! [[ "$num" =~ ^[0-9]+$ ]]; then
+                echo "Invalid number: $num"
+                valid=false
+                break
+            fi
             if (( num < 1 || num > ${#CLIENTS[@]} )); then
                 echo "Invalid number: $num"
                 valid=false
@@ -1460,7 +1449,6 @@ function selectClient() {
         $valid && break
     done
 
-    # Remove duplicates
     mapfile -t choice < <(printf '%s\n' "${choice[@]}" | sort -n -u)
 
     SELECTED_CLIENTS=()
@@ -1468,7 +1456,6 @@ function selectClient() {
         SELECTED_CLIENTS+=("${CLIENTS[$((num-1))]}")
     done
 
-    export SELECTED_CLIENTS
     echo "Selected clients: ${SELECTED_CLIENTS[*]}"
 }
 
@@ -1908,18 +1895,16 @@ function manageMenu() {
     echo "   8) Restart OpenVPN"
     echo "   9) Remove OpenVPN"
     echo "   10) Exit"
-    until [[ $MENU_OPTION =~ ^[1-9]$ ]]; do
-        read -rp "Select an option [1-9]: " MENU_OPTION
+    until [[ $MENU_OPTION =~ ^[0-9]+$ ]]; do
+        read -rp "Select an option [1-10]: " MENU_OPTION
     done
-
-	run_speedtest
 
     case $MENU_OPTION in
         1) newClient ;;
         2) revokeClient ;;
         3) restoreClientConfig ;;
         4) activeConnections ;;
-        5) run_speedtest ;;
+        5) runSpeedtest ;;
         6) backupOpenvpn ;;
         7) restoreOpenvpn ;;
         8) restartOrReloadServices ;;
