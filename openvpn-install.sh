@@ -1309,7 +1309,6 @@ Download the .ovpn file and import it in your OpenVPN client."
 }
 
 function selectClient() {
-    local MODE="$1"
     local CLIENTS=()
     local i=1
 
@@ -1318,42 +1317,39 @@ function selectClient() {
         return 1
     fi
 
-    if [[ "$MODE" == "all" ]]; then
-        if [[ ! -f "$EASYRSA_PKI/index.txt" ]]; then
-            echo "Index file not found: $EASYRSA_PKI/index.txt"
-            return 1
-        fi
-        mapfile -t CLIENTS < <(awk -F= '/^V/ { gsub(/^ +| +$/,"",$2); print $2 }' "$EASYRSA_PKI/index.txt")
-    else
-        shopt -s nullglob
-        local certs=( "$EASYRSA_PKI/issued"/*.crt )
-        shopt -u nullglob
+	if [[ ! -f "$EASYRSA_PKI/index.txt" ]]; then
+		echo "Index file not found: $EASYRSA_PKI/index.txt"
+		return 1
+	fi
 
-        for CRT in "${certs[@]}"; do
-            [[ -f "$CRT" ]] || continue
+	shopt -s nullglob
+	local certs=( "$EASYRSA_PKI/issued"/*.crt )
+	shopt -u nullglob
 
-            local NAME
-            NAME=$(basename "$CRT" .crt)
+	for CRT in "${certs[@]}"; do
+		[[ -f "$CRT" ]] || continue
 
-            [[ $NAME =~ ^server_[[:alnum:]]+$ ]] && continue
-            [[ $NAME == "server" ]] && continue
+		local NAME
+		NAME=$(basename "$CRT" .crt)
 
-            local KEY="$EASYRSA_PKI/private/${NAME}.key"
-            [[ ! -f "$KEY" ]] && continue
+		[[ $NAME =~ ^server_[[:alnum:]]+$ ]] && continue
+		[[ $NAME == "server" ]] && continue
 
-            local SERIAL
-            SERIAL=$(openssl x509 -serial -noout -in "$CRT" 2>/dev/null | cut -d= -f2)
-            if [[ -f "$EASYRSA_PKI/index.txt" ]] && grep -qi "^R.*${SERIAL}" "$EASYRSA_PKI/index.txt" 2>/dev/null; then
-                continue
-            fi
+		local KEY="$EASYRSA_PKI/private/${NAME}.key"
+		[[ ! -f "$KEY" ]] && continue
 
-            if ! openssl x509 -checkend 0 -noout -in "$CRT" >/dev/null 2>&1; then
-                continue
-            fi
+		local SERIAL
+		SERIAL=$(openssl x509 -serial -noout -in "$CRT" 2>/dev/null | cut -d= -f2)
+		if [[ -f "$EASYRSA_PKI/index.txt" ]] && grep -qi "^R.*${SERIAL}" "$EASYRSA_PKI/index.txt" 2>/dev/null; then
+			continue
+		fi
 
-            CLIENTS+=("$NAME")
-        done
-    fi
+		if ! openssl x509 -checkend 0 -noout -in "$CRT" >/dev/null 2>&1; then
+			continue
+		fi
+
+		CLIENTS+=("$NAME")
+	done
 
     if [[ ${#CLIENTS[@]} -eq 0 ]]; then
         echo "No available clients."
@@ -1460,7 +1456,7 @@ function selectClient() {
 }
 
 function revokeClient() {
-    if ! selectClient "all"; then
+    if ! selectClient ; then
         return
     fi
 
@@ -1501,7 +1497,7 @@ function revokeClient() {
 }
 
 function restoreClientConfig() {
-    if ! selectClient "valid"; then
+    if ! selectClient ; then
         return
     fi
 
