@@ -11,6 +11,12 @@ UNBOUND_OPENVPN_CONF="$UNBOUND_ROOT/openvpn.conf"
 EASYRSA_ROOT="$OPENVPN_ROOT/easy-rsa"
 EASYRSA_PKI="$EASYRSA_ROOT/pki"
 SERVER_CONF="$OPENVPN_ROOT/server.conf"
+CLIENT_TEMPLATE="$OPENVPN_ROOT/client-template.txt"
+
+IPTABLES_ROOT="/etc/iptables"
+
+ADD_OPENVPN_RULES="$IPTABLES_ROOT/add-openvpn-rules.sh"
+RM_OPENVPN_RULES="$IPTABLES_ROOT/rm-openvpn-rules.sh"
 
 function isRoot() {
 	if [ "$EUID" -ne 0 ]; then
@@ -99,6 +105,46 @@ function checkOS() {
 		OS=arch
 	else
 		echo "It looks like you aren't running this installer on a Debian, Ubuntu, Fedora, CentOS, Amazon Linux 2, Oracle Linux 8 or Arch Linux system."
+		exit 1
+	fi
+}
+
+function install_speedtest() {
+	case "$OS" in
+		debian|ubuntu)
+			sudo apt-get update && sudo apt-get install -y speedtest-cli
+			;;
+		fedora)
+			sudo dnf install -y speedtest-cli
+			;;
+		centos|oracle)
+			sudo yum install -y speedtest-cli
+			;;
+		amzn|amzn2023)
+			sudo yum install -y speedtest-cli
+			;;
+		arch)
+			sudo pacman -Sy --noconfirm speedtest-cli
+			;;
+		*)
+			echo "❌ No install method for $OS."
+			exit 1
+			;;
+	esac
+}
+
+function run_speedtest() {
+	if ! command -v speedtest &>/dev/null && ! command -v speedtest-cli &>/dev/null; then
+		echo "⚙️ Installing speedtest-cli..."
+		install_speedtest
+	fi
+
+	if command -v speedtest &>/dev/null; then
+		speedtest --secure
+	elif command -v speedtest-cli &>/dev/null; then
+		speedtest-cli
+	else
+		echo "❌ Speedtest utility not found after install."
 		exit 1
 	fi
 }
@@ -1003,7 +1049,7 @@ function configureAndStartService() {
 
 function setupIptablesAndService() {
 	# Add iptables rules in two scripts
-	mkdir -p /etc/iptables
+	mkdir -p $IPTABLES_ROOT
 
 	# Script to add rules
 	echo "#!/bin/sh
@@ -1011,14 +1057,14 @@ iptables -t nat -I POSTROUTING 1 -s 10.8.0.0/24 -o $NIC -j MASQUERADE
 iptables -I INPUT 1 -i tun0 -j ACCEPT
 iptables -I FORWARD 1 -i $NIC -o tun0 -j ACCEPT
 iptables -I FORWARD 1 -i tun0 -o $NIC -j ACCEPT
-iptables -I INPUT 1 -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT" >/etc/iptables/add-openvpn-rules.sh
+iptables -I INPUT 1 -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT" >$ADD_OPENVPN_RULES
 
 	if [[ $IPV6_SUPPORT == 'y' ]]; then
 		echo "ip6tables -t nat -I POSTROUTING 1 -s fd42:42:42:42::/112 -o $NIC -j MASQUERADE
 ip6tables -I INPUT 1 -i tun0 -j ACCEPT
 ip6tables -I FORWARD 1 -i $NIC -o tun0 -j ACCEPT
 ip6tables -I FORWARD 1 -i tun0 -o $NIC -j ACCEPT
-ip6tables -I INPUT 1 -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT" >>/etc/iptables/add-openvpn-rules.sh
+ip6tables -I INPUT 1 -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT" >>$ADD_OPENVPN_RULES
 	fi
 
 	# Script to remove rules
@@ -1027,18 +1073,18 @@ iptables -t nat -D POSTROUTING -s 10.8.0.0/24 -o $NIC -j MASQUERADE
 iptables -D INPUT -i tun0 -j ACCEPT
 iptables -D FORWARD -i $NIC -o tun0 -j ACCEPT
 iptables -D FORWARD -i tun0 -o $NIC -j ACCEPT
-iptables -D INPUT -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT" >/etc/iptables/rm-openvpn-rules.sh
+iptables -D INPUT -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT" >$RM_OPENVPN_RULES
 
 	if [[ $IPV6_SUPPORT == 'y' ]]; then
 		echo "ip6tables -t nat -D POSTROUTING -s fd42:42:42:42::/112 -o $NIC -j MASQUERADE
 ip6tables -D INPUT -i tun0 -j ACCEPT
 ip6tables -D FORWARD -i $NIC -o tun0 -j ACCEPT
 ip6tables -D FORWARD -i tun0 -o $NIC -j ACCEPT
-ip6tables -D INPUT -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT" >>/etc/iptables/rm-openvpn-rules.sh
+ip6tables -D INPUT -i $NIC -p $PROTOCOL --dport $PORT -j ACCEPT" >>$RM_OPENVPN_RULES
 	fi
 
-	chmod +x /etc/iptables/add-openvpn-rules.sh
-	chmod +x /etc/iptables/rm-openvpn-rules.sh
+	chmod +x $ADD_OPENVPN_RULES
+	chmod +x $RM_OPENVPN_RULES
 
 	# Handle the rules via a systemd script
 	echo "[Unit]
@@ -1048,8 +1094,8 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/etc/iptables/add-openvpn-rules.sh
-ExecStop=/etc/iptables/rm-openvpn-rules.sh
+ExecStart=$ADD_OPENVPN_RULES
+ExecStop=$RM_OPENVPN_RULES
 RemainAfterExit=yes
 
 [Install]
@@ -1080,7 +1126,7 @@ function writeClientTemplateHeader() {
 }
 
 function createClientTemplate() {
-    local outfile="$OPENVPN_ROOT/client-template.txt"
+    local outfile=$CLIENT_TEMPLATE
 
     writeClientTemplateHeader "$outfile"
 
@@ -1109,14 +1155,13 @@ EOF
 function updateClientTemplateHead() {
     local tmpfile
     tmpfile=$(mktemp)
-
     writeClientTemplateHeader "$tmpfile"
 
     local tail_start
-    tail_start=$(grep -n -m1 '^dev tun' "$OPENVPN_ROOT/client-template.txt" | cut -d -f1)
-    [[ -n $tail_start ]] && tail -n +"$tail_start" "$OPENVPN_ROOT/client-template.txt" >>"$tmpfile"
+    tail_start=$(grep -n -m1 '^dev tun' $CLIENT_TEMPLATE | cut -d -f1)
+    [[ -n $tail_start ]] && tail -n +"$tail_start" $CLIENT_TEMPLATE >>"$tmpfile"
 
-    mv "$tmpfile" "$OPENVPN_ROOT/client-template.txt"
+    mv "$tmpfile" $CLIENT_TEMPLATE
 }
 
 function installOpenVPN() {
@@ -1256,7 +1301,7 @@ function newClient() {
 	fi
 
 	# Generates the custom client.ovpn
-	cp "$OPENVPN_ROOT/client-template.txt" "$homeDir/$CLIENT.ovpn"
+	cp $CLIENT_TEMPLATE "$homeDir/$CLIENT.ovpn"
 	{
 		echo "<ca>"
 		cat "$EASYRSA_PKI/ca.crt"
@@ -1494,7 +1539,7 @@ function restoreClientConfig() {
         fi
 
         # Create client config
-        cp "$OPENVPN_ROOT/client-template.txt" "$homeDir/$CLIENT.ovpn"
+        cp $CLIENT_TEMPLATE "$homeDir/$CLIENT.ovpn"
         {
             echo "<ca>"
             cat "$EASYRSA_PKI/ca.crt"
@@ -1564,18 +1609,18 @@ function removeUnbound() {
 }
 
 function backupOpenvpn() {
-    BACKUP_DIR="/var/backups/openvpn"
-    mkdir -p "$BACKUP_DIR"
-    FINAL_ARCHIVE="$BACKUP_DIR/openvpn-backup-$(date +%F_%H-%M-%S).tar.gz"
-    TMP_DIR=$(mktemp -d)
-    rsync -a --exclude='easy-rsa' $OPENVPN_ROOT "$TMP_DIR/etc/"
-    if [[ -d "$EASYRSA_PKI" ]]; then
-        mkdir -p "$TMP_DIR$EASYRSA_ROOT"
-        cp -a "$EASYRSA_PKI" "$TMP_DIR$EASYRSA_ROOT/"
-    fi
-    tar -czf "$FINAL_ARCHIVE" -C "$TMP_DIR" etc
-    rm -rf "$TMP_DIR"
-    echo "Backup created: $FINAL_ARCHIVE"
+    local backup_dir="/var/backups/openvpn"
+    local final_archive="$backup_dir/openvpn-backup-$(date +%F_%H-%M-%S).tar.gz"
+    local tmp_dir
+    mkdir -p "$backup_dir"
+    tmp_dir=$(mktemp -d)
+
+    rsync -a --exclude='easy-rsa' $OPENVPN_ROOT "$tmp_dir/etc/"
+    [[ -d $EASYRSA_PKI ]] && mkdir -p "$tmp_dir$EASYRSA_ROOT" && cp -a $EASYRSA_PKI "$tmp_dir$EASYRSA_ROOT/"
+
+    tar -czf $final_archive -C $tmp_dir etc
+    rm -rf $tmp_dir
+    echo "Backup created: $final_archive"
 }
 
 function detect_dns_choice() {
@@ -1612,19 +1657,15 @@ function detect_dns_choice() {
 
 function reverseConfig() {
 
-    CONF_DIR="$TMP_DIR$OPENVPN_ROOT"
-    SERVER_CONF="$CONF_DIR/server.conf"
-    CLIENT_TEMPLATE="$CONF_DIR/client-template.txt"
-
     # IPv6
-    if grep -q '^server-ipv6' "$SERVER_CONF"; then
+    if grep -q '^server-ipv6' "$TMP_DIR$SERVER_CONF"; then
         IPV6_SUPPORT="y"
     else
         IPV6_SUPPORT="n"
     fi
 
 	# Port
-	PORT=$(grep -m1 '^port ' "$SERVER_CONF" | awk '{print $2}')
+	PORT=$(grep -m1 '^port ' "$TMP_DIR$SERVER_CONF" | awk '{print $2}')
 	if [[ "$PORT" == "1194" ]]; then
 		PORT_CHOICE=1
 	else
@@ -1632,7 +1673,7 @@ function reverseConfig() {
 	fi
 
     # Protocol
-	PROTOCOL=$(grep -m1 '^proto ' "$SERVER_CONF" | awk '{print $2}')
+	PROTOCOL=$(grep -m1 '^proto ' "$TMP_DIR$SERVER_CONF" | awk '{print $2}')
 	if [[ "$PROTOCOL" =~ udp ]]; then
 		PROTOCOL="udp"
 		PROTOCOL_CHOICE=1
@@ -1642,10 +1683,10 @@ function reverseConfig() {
 	fi
 
     # Endpoint
-    ENDPOINT_FROM_BACKUP=$(grep -m1 '^remote ' "$CLIENT_TEMPLATE" | awk '{print $2}')
+    ENDPOINT_FROM_BACKUP=$(grep -m1 '^remote ' "$TMP_DIR$CLIENT_TEMPLATE" | awk '{print $2}')
 
     # DNS detection
-    DNS_IPS=($(grep 'push "dhcp-option DNS ' "$SERVER_CONF" | sed -E 's/.*DNS ([^"]+)".*/\1/'))
+    DNS_IPS=($(grep 'push "dhcp-option DNS ' "$TMP_DIR$SERVER_CONF" | sed -E 's/.*DNS ([^"]+)".*/\1/'))
 
     DNS=$(detect_dns_choice)
     if [[ $DNS -eq 13 ]]; then
@@ -1687,23 +1728,23 @@ function restoreOpenvpn() {
 	done
 
 	read -e -p "Specify path to backup file (.tar.gz): " RESTORE_FILE
-	if [[ ! -f "$RESTORE_FILE" ]]; then
+	if [[ ! -f $RESTORE_FILE ]]; then
 		echo "File not found!"
 		return 1
 	fi
 
 	TMP_DIR=$(mktemp -d)
-	tar -xzf "$RESTORE_FILE" -C "$TMP_DIR"
+	tar -xzf $RESTORE_FILE -C $TMP_DIR
 	if [[ $? -ne 0 ]]; then
 		echo "Error extracting backup."
-		rm -rf "$TMP_DIR"
+		rm -rf $TMP_DIR
 		return 1
 	fi
 
 	BACKUP_SERVER_CONF="$TMP_DIR$OPENVPN_ROOT/server.conf"
 	if [[ ! -f "$BACKUP_SERVER_CONF" ]]; then
 		echo "[!] File server.conf not found in backup. Cannot proceed with restore."
-		rm -rf "$TMP_DIR"
+		rm -rf $TMP_DIR
 		return 1
 	fi
 
@@ -1737,28 +1778,28 @@ function restoreOpenvpn() {
 		tar -czf "/root/openvpn_before_restore_$BACKUP_DATE.tar.gz" $OPENVPN_ROOT 2>/dev/null
 		echo "Backup created: /root/openvpn_before_restore_$BACKUP_DATE.tar.gz"
 		cp -a "$TMP_DIR$OPENVPN_ROOT/." "$OPENVPN_ROOT/"
-		if [[ ! -x "$EASYRSA_ROOT/easyrsa" || ! -d "$EASYRSA_PKI" || ! -s "$EASYRSA_ROOT/easyrsa" ]]; then
+		if [[ ! -x "$EASYRSA_ROOT/easyrsa" || ! -d $EASYRSA_PKI || ! -s "$EASYRSA_ROOT/easyrsa" ]]; then
 			echo "[*] Easy-RSA not found, not executable, or damaged in target directory. Installing fresh copy..."
 			installEasyRSA
 			if [[ $? -ne 0 ]]; then
 				echo "[!] Error downloading Easy-RSA"
-				rm -rf "$TMP_DIR"
+				rm -rf $TMP_DIR
 				return 1
 			fi
 		fi
-		PORT=$(grep -E '^port ' "$BACKUP_SERVER_CONF" | awk '{print $2}')
-		PROTO=$(grep -E '^proto ' "$BACKUP_SERVER_CONF" | awk '{print $2}')
+		PORT=$(grep -E '^port ' $BACKUP_SERVER_CONF | awk '{print $2}')
+		PROTO=$(grep -E '^proto ' $BACKUP_SERVER_CONF | awk '{print $2}')
 		echo "[*] Checking iptables rules..."
 		if ! iptables -C INPUT -p "$PROTO" --dport "$PORT" -j ACCEPT 2>/dev/null; then
 			iptables -I INPUT -p "$PROTO" --dport "$PORT" -j ACCEPT
-			iptables-save > /etc/iptables/rules.v4
+			iptables-save > "$IPTABLES_ROOT/rules.v4"
 			echo "[+] Added rule for port $PORT/$PROTO."
 		else
 			echo "[*] Rule for port $PORT/$PROTO already exists."
 		fi
 	fi
 
-	rm -rf "$TMP_DIR"
+	rm -rf $TMP_DIR
 	restartOrReloadServices
 	echo "Restore complete. Verify service status and logs."
 	echo "If something went wrong, you can rollback using the backup created before restore:"
@@ -1800,8 +1841,8 @@ function removeOpenVPN() {
         systemctl disable iptables-openvpn
         rm /etc/systemd/system/iptables-openvpn.service
         systemctl daemon-reload
-        rm /etc/iptables/add-openvpn-rules.sh
-        rm /etc/iptables/rm-openvpn-rules.sh
+        rm $ADD_OPENVPN_RULES
+        rm $RM_OPENVPN_RULES
 
         # SELinux
         if hash sestatus 2>/dev/null; then
@@ -1861,25 +1902,29 @@ function manageMenu() {
     echo "   2) Revoke existing user"
     echo "   3) Restore user configuration"
     echo "   4) Active connections"
-    echo "   5) Backup OpenVPN"
-    echo "   6) Restore OpenVPN"
-    echo "   7) Restart OpenVPN"
-    echo "   8) Remove OpenVPN"
-    echo "   9) Exit"
+    echo "   5) Run speedtest"
+    echo "   6) Backup OpenVPN"
+    echo "   7) Restore OpenVPN"
+    echo "   8) Restart OpenVPN"
+    echo "   9) Remove OpenVPN"
+    echo "   10) Exit"
     until [[ $MENU_OPTION =~ ^[1-9]$ ]]; do
         read -rp "Select an option [1-9]: " MENU_OPTION
     done
+
+	run_speedtest
 
     case $MENU_OPTION in
         1) newClient ;;
         2) revokeClient ;;
         3) restoreClientConfig ;;
         4) activeConnections ;;
-        5) backupOpenvpn ;;
-        6) restoreOpenvpn ;;
-        7) restartOrReloadServices ;;
-        8) removeOpenVPN ;;
-        9) exit 0 ;;
+        5) run_speedtest ;;
+        6) backupOpenvpn ;;
+        7) restoreOpenvpn ;;
+        8) restartOrReloadServices ;;
+        9) removeOpenVPN ;;
+        10) exit 0 ;;
     esac
 }
 
