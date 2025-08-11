@@ -932,7 +932,7 @@ function updateServerConfigHead() {
     writeServerConfigHeader "$tmpfile"
 
     local tail_start
-    tail_start=$(grep -n -m1 -E '^(compress|dh )' $SERVER_CONF | cut -d: -f1)
+    tail_start=$(grep -n -m1 -E '^(compress|dh )' $SERVER_CONF | cut -d -f1)
     [[ -n $tail_start ]] && tail -n +"$tail_start" $SERVER_CONF >>"$tmpfile"
 
     mv "$tmpfile" $SERVER_CONF
@@ -1113,7 +1113,7 @@ function updateClientTemplateHead() {
     writeClientTemplateHeader "$tmpfile"
 
     local tail_start
-    tail_start=$(grep -n -m1 '^dev tun' "$OPENVPN_ROOT/client-template.txt" | cut -d: -f1)
+    tail_start=$(grep -n -m1 '^dev tun' "$OPENVPN_ROOT/client-template.txt" | cut -d -f1)
     [[ -n $tail_start ]] && tail -n +"$tail_start" "$OPENVPN_ROOT/client-template.txt" >>"$tmpfile"
 
     mv "$tmpfile" "$OPENVPN_ROOT/client-template.txt"
